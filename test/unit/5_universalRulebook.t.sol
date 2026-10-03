@@ -1958,4 +1958,98 @@ contract URPTest is BaseTest {
         assertEq(_check(0, garbled), 0, "still decodes and still passes - gate 4 is not canonical");
         assertEq(_spent(), 1 ether, "and meters normally");
     }
+
+    // ═════════════ U-23: allow-list exactness (first-match makes a later rule dead) ═════════════
+
+    /**
+     * @dev A `(target, selector)` pair may appear at most once. `_requireAllowed` returns the
+     *      FIRST match, and `maxValue` / `hasBeneficiary` / `beneficiaryOffset` are all read from
+     *      that one entry, so a second entry on the same pair is unreachable: the policy would
+     *      enforce a weaker rulebook than `getConfig` advertises, with no way to reconcile them.
+     *      Mirrors the SVM `_rulesCollide` guard, which already refuses this shape for the SVM
+     *      rulebook and documents the same first-match reason.
+     */
+    function test_U23_DuplicateAllowListEntry_Rejected() public {
+        AllowedCall[] memory rules = new AllowedCall[](2);
+        rules[0] = AllowedCall({
+            target: PROTOCOL,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: BENEFICIARY_OFFSET,
+            hasBeneficiary: true,
+            maxValue: 1 ether
+        });
+        rules[1] = AllowedCall({
+            target: PROTOCOL, // same target
+            selector: SWAP_SELECTOR, // same selector
+            beneficiaryOffset: BENEFICIARY_OFFSET,
+            hasBeneficiary: true,
+            maxValue: 0
+        });
+
+        vm.prank(address(engine));
+        vm.expectRevert(abi.encodeWithSelector(UniversalRulesPolicyErrors.AmbiguousRule.selector, 0, 1));
+        urp.initializeWithMultiplexer(ACCOUNT, CID, universalInitData(_config(rules)));
+    }
+
+    /// @dev The rejected pair is the only thing refused: a different selector on the same target,
+    ///      and the same selector on a different target, are both legitimate and must survive.
+    function test_U23_DistinctEntries_Accepted() public {
+        AllowedCall[] memory rules = new AllowedCall[](2);
+        rules[0] = AllowedCall({
+            target: PROTOCOL,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: BENEFICIARY_OFFSET,
+            hasBeneficiary: true,
+            maxValue: 1 ether
+        });
+        rules[1] = AllowedCall({
+            target: PROTOCOL, selector: POKE_SELECTOR, beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0
+        });
+
+        _init(_config(rules));
+        assertEq(urp.getConfig(CID, ACCOUNT).allowedCalls.length, 2, "both distinct entries stored");
+    }
+
+    /**
+     * @dev The control for the case the guard exists to stop. Before the fix this list initialised
+     *      cleanly, and the 500-ether inner call then passed against the owner's stated `maxValue: 0`
+     *      on entry 1, because `_requireAllowed` returned entry 0. With the duplicate refused at
+     *      init, the owner learns about the ambiguity instead of shipping a live 1-ether cap they
+     *      believe they tightened to zero.
+     */
+    function test_U23_DuplicateWouldHaveSilentlyWeakenedTheCap() public {
+        AllowedCall[] memory rules = new AllowedCall[](2);
+        rules[0] = AllowedCall({
+            target: PROTOCOL,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: BENEFICIARY_OFFSET,
+            hasBeneficiary: true,
+            maxValue: 1 ether
+        });
+        rules[1] = AllowedCall({
+            target: PROTOCOL,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: BENEFICIARY_OFFSET,
+            hasBeneficiary: true,
+            maxValue: 0
+        });
+
+        // The list the owner actually wrote.
+        vm.prank(address(engine));
+        vm.expectRevert(abi.encodeWithSelector(UniversalRulesPolicyErrors.AmbiguousRule.selector, 0, 1));
+        urp.initializeWithMultiplexer(ACCOUNT, CID, universalInitData(_config(rules)));
+
+        // The control: entry 0 alone, with the cap the owner believed was in force.
+        _initDefault();
+        Multicall[] memory fat = new Multicall[](1);
+        fat[0] =
+            Multicall({ to: PROTOCOL, value: 500 ether, data: abi.encodeWithSelector(SWAP_SELECTOR, uint256(1), CEA) });
+        vm.prank(address(engine));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                UniversalRulesPolicyErrors.InnerValueExceedsAllowance.selector, 0, 500 ether, 1 ether
+            )
+        );
+        urp.checkAction(CID, ACCOUNT, GATEWAY, 0, _requestData(1 ether, fat));
+    }
 }

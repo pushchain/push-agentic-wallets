@@ -294,11 +294,14 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
      *           or already past, and a zero asset or expected destination account. An owner consent
      *           term has no meaningful silence, so "never expires" is written as the maximum value.
      *         - Deliberately does not validate cap values (zero and max are both legal, a zero
-     *           per-call cap being a valid redeploy-only rules set), `beneficiaryOffset`, or
-     *           allow-list contents. A wrong offset fails closed at validation time; it cannot widen
-     *           a rules set, only break it. Offsets must be generated from each protocol's ABI by
-     *           tooling rather than hand-typed, and each newly supported protocol must ship a test
-     *           rejecting a wrong beneficiary and an oversized amount.
+     *           per-call cap being a valid redeploy-only rules set) or `beneficiaryOffset`. A wrong
+     *           offset fails closed at validation time; it cannot widen a rules set, only break it.
+     *           Offsets must be generated from each protocol's ABI by tooling rather than
+     *           hand-typed, and each newly supported protocol must ship a test rejecting a wrong
+     *           beneficiary and an oversized amount.
+     *         - Refuses two allow-list entries sharing a `(target, selector)` pair, because the
+     *           check path takes the first match and the later entry's cap and beneficiary pin
+     *           would never run. Mirrors the SVM `_rulesCollide` guard.
      *         - Anyone may call this with themselves as the multiplexer; that writes into their own
      *           keyed slice and the engine never reads it.
      *         - Writes the config, sets the initialised flag, and emits `RulesConfigured` and
@@ -387,6 +390,8 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         if (incoming.asset == address(0) || incoming.expectedCEA == address(0)) {
             revert UniversalRulesPolicyErrors.InvalidConfigField();
         }
+
+        _checkAllowedCallPairwise(incoming.allowedCalls);
 
         // ─── THE TEETH ───
         //
@@ -1665,6 +1670,33 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             word := mload(add(add(data, 0x20), offset))
         }
         return address(uint160(uint256(word)));
+    }
+
+    /**
+     * @dev Allow-list exactness guard. Two entries sharing a `(target, selector)` pair must be
+     *      refused, because `_requireAllowed` returns the first match and every field it then reads
+     *      — `maxValue`, `hasBeneficiary`, `beneficiaryOffset` — comes from that one entry. The
+     *      later entry is dead: the policy enforces a weaker rulebook than `getConfig` advertises,
+     *      and the two can never be reconciled after the fact. This is the EVM counterpart of the
+     *      SVM `_rulesCollide` guard, for the same reason: first-match makes the later rule dead and
+     *      its pins never run. O(n^2) at n <= MAX_ALLOWED_CALLS.
+     * @param rules The incoming allow-list.
+     */
+    function _checkAllowedCallPairwise(AllowedCall[] memory rules) internal pure {
+        uint256 n = rules.length;
+        for (uint256 i; i < n;) {
+            for (uint256 j; j < i;) {
+                if (rules[j].target == rules[i].target && rules[j].selector == rules[i].selector) {
+                    revert UniversalRulesPolicyErrors.AmbiguousRule(j, i);
+                }
+                unchecked {
+                    ++j;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /**
