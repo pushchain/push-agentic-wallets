@@ -1,0 +1,112 @@
+{
+  "network": "push-donut-testnet",
+  "chainId": 42101,
+  "generation": "v4",
+  "explorer": "https://donut.push.network",
+  "commit": "git:e8db74815cfbbf5389593805e464fe8d85f7f735",
+  "engineForkCommit": "7dc20e4",
+  "forge": "1.5.1-stable",
+  "deployer": "0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7",
+  "blocks": [
+    23923806,
+    23923810
+  ],
+  "deploymentGas": 17278001,
+  "deploymentCostPC": "0.019437751125",
+  "contracts": {
+    "factoryProxy": {
+      "address": "0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF",
+      "contract": "ERC1967Proxy (UUPS)",
+      "sizeBytes": 141,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF",
+      "deployTx": "0xe6fce2657bd1b99a171759dbb1bcbdbc7d1e5f41ed79e81d10ac142190322c41",
+      "note": "PERMANENT, user-facing: deploy and look up wallets here."
+    },
+    "factoryLogic": {
+      "address": "0xe138Dc6EfC10233BE1e6c8aF1Caf8cABe599cfC2",
+      "contract": "AGWFactory",
+      "sizeBytes": 9992,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0xe138Dc6EfC10233BE1e6c8aF1Caf8cABe599cfC2",
+      "deployTx": "0xddefd0c32481ad523e43f4640ed0ed0a2e7d2f1124171cb9b1704f48f3dcf28c"
+    },
+    "walletImplementation": {
+      "address": "0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c",
+      "contract": "AGW",
+      "sizeBytes": 16564,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c",
+      "deployTx": "0x77eef6ec25a2e5213636d6f34679e43486a1b4e185789d145920761dddc77f83",
+      "note": "Clone target; accountId push.agw.1.0.0."
+    },
+    "urp": {
+      "address": "0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af",
+      "contract": "TransparentUpgradeableProxy",
+      "sizeBytes": 830,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af",
+      "deployTx": "0xa52689e41f70b2d72d938f3c62f4dd6db0bf3595e9f89f44889ae17ff7692655",
+      "note": "PERMANENT: every wallet pins it; every rule names it as its only action policy."
+    },
+    "urpImplementation": {
+      "address": "0xA2391eee4C9EA1B32AEB3A460B77296EA709F02F",
+      "contract": "UniversalRulesPolicy 3.1.0",
+      "sizeBytes": 24326,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0xA2391eee4C9EA1B32AEB3A460B77296EA709F02F",
+      "deployTx": "0x6b5705fccec7f68c0ac71294a4cf6b1f4d509b8c1b1645658c502f2bca917a91"
+    },
+    "urpProxyAdmin": {
+      "address": "0x0b7a31ec85117892aEA90AA5cB6514e2F97c2295",
+      "contract": "ProxyAdmin",
+      "sizeBytes": 926,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0x0b7a31ec85117892aEA90AA5cB6514e2F97c2295",
+      "note": "KEEP: no URP upgrade is possible without it. Created internally by the TUP; read from the ERC-1967 admin slot."
+    },
+    "sessionValidator": {
+      "address": "0x068EE2388475A98EE1f5a434C58bFF3444fffFe6",
+      "contract": "AgentValidator",
+      "sizeBytes": 806,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0x068EE2388475A98EE1f5a434C58bFF3444fffFe6",
+      "deployTx": "0xb7c736e905952354201767da3287eb4769870029f29db7baeab732ac9db73e35"
+    },
+    "sessionEngine": {
+      "address": "0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a",
+      "contract": "SmartSession (fork 7dc20e4)",
+      "sizeBytes": 22581,
+      "verified": true,
+      "explorer": "https://donut.push.network/address/0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a",
+      "deployTx": "0xf36a57a8a626e6918cd80ffc0a635a15afac68e643b576fd3891c482e27c9fd7"
+    }
+  },
+  "external": {
+    "universalGateway": "0x00000000000000000000000000000000000000C1",
+    "universalCore": "0x00000000000000000000000000000000000000C0",
+    "ueaFactory": "0x00000000000000000000000000000000000000eA",
+    "universalExecutorModule": "0x14191Ea54B4c176fCf86f51b0FAc7CB1E71Df7d7",
+    "gatewayImplementationAtDeploy": "0x1e412939780f2b834DC42C7AC58d9f99888Da659",
+    "gatewayOutboundSelector": "0x77b86bec"
+  },
+  "adminState": {
+    "factoryDefaultAdmin": "0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7",
+    "defaultAdminDelaySeconds": 172800,
+    "urpProxyAdminOwner": "0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7",
+    "pauserRole": "none",
+    "operatorRole": "none",
+    "note": "Testnet: both upgrade authorities are the deployer EOA. PAUSER_ROLE and OPERATOR_ROLE are unassigned; grant them before the factory can be paused."
+  },
+  "ruleEncoding": {
+    "initData": "abi.encode(uint16 version, string chainNamespace, bytes body), version 1",
+    "universalTermsTuple": "(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])",
+    "tokens": "PRC20 addresses on Push, 1..8 per cross-chain rule; type(uint256).max = unlimited, 0 = nothing",
+    "pushChainHash": "0x3d6bc1f1d3fb03065860265a8e93840b586e57075d956cd41b4319d040be87f9"
+  },
+  "supersedes": {
+    "generation": "v3.2",
+    "factoryProxy": "0x2578041963f692f8b51A137A1c7ddc0c84a8226A",
+    "urp": "0xeAd99E254ACD64219d057400cdC2A2390bC74372"
+  }
+}

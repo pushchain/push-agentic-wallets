@@ -1,77 +1,112 @@
-# Push Agentic Wallet — deployed addresses
+# Push Agentic Wallet — deployed addresses (Donut)
 
-**Generation `v3.2` (chain-derived rules set mode)** · Chain ID `42101` · explorer [donut.push.network](https://donut.push.network) · deployed at block `23296330` · commit `67929f2` on `pushAgenticWallet_v3`
+**Generation `v4` (multi-asset rules, versioned envelope, agent sender door, checkpoints)** · Chain ID `42101` ·
+explorer [donut.push.network](https://donut.push.network) · deployed in blocks `23923806`–`23923810` ·
+commit `e8db748` (branch `deploy-agw` = `pushAgenticWallet_v3`) · `forge 1.5.1-stable`
 
 ## The two addresses you need
 
 | | Address |
 |---|---|
-| **Factory** — deploy and look up wallets | [`0x2578041963f692f8b51A137A1c7ddc0c84a8226A`](https://donut.push.network/address/0x2578041963f692f8b51A137A1c7ddc0c84a8226A) |
-| **URP** — name this as every session's action policy | [`0xeAd99E254ACD64219d057400cdC2A2390bC74372`](https://donut.push.network/address/0xeAd99E254ACD64219d057400cdC2A2390bC74372) |
+| **Factory**: deploy and look up wallets | [`0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF`](https://donut.push.network/address/0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF) |
+| **URP**: name this as every rule's action policy | [`0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af`](https://donut.push.network/address/0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af) |
 
-Both are **proxies**, and both addresses are permanent. Never point an integration at an implementation.
+Both are **proxies**. Point integrations at these, never at an implementation.
 
 ## Everything
 
-| Contract | Address | Size | Verified |
+| Contract | Address | Size (B) | Verified |
 |---|---|---:|:---:|
-| `factoryProxy` | `0x2578041963f692f8b51A137A1c7ddc0c84a8226A` | 141 | ✅ |
-| `factoryLogic` | `0x517a10C2F2E786CC8271dbD489dFE27dE8F7BE67` | 8,300 | ✅ |
-| `walletImplementation` | `0xD7FEF338572f96edBeF89E720f1F0fF1284ec79C` | 12,312 | ✅ |
-| `urp` *(proxy)* | `0xeAd99E254ACD64219d057400cdC2A2390bC74372` | 830 | ✅ |
-| `urpImplementation` | `0xc95f179D3aDE283E11CF90f3F8E04BFE8534ff4F` | 13,176 | ✅ |
-| `urpProxyAdmin` | `0xA634a0cB4F374D89B2cccbdc77300c8Ac3827BF4` | 926 | ✅ |
-| `sessionValidator` | `0xF77660838Cebb65BD6357FDe71d19f97CC65E829` | 1,720 | ✅ |
-| `sessionEngine` | `0x046B2874Fc9F920ad53A317b3cf9d3d1974466f3` | 22,581 | ✅ |
+| `factoryProxy` (ERC-1967, UUPS) | [`0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF`](https://donut.push.network/address/0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF) | 141 | ✅ |
+| `factoryLogic` (`AGWFactory`) | [`0xe138Dc6EfC10233BE1e6c8aF1Caf8cABe599cfC2`](https://donut.push.network/address/0xe138Dc6EfC10233BE1e6c8aF1Caf8cABe599cfC2) | 9,992 | ✅ |
+| `walletImplementation` (`AGW`) | [`0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c`](https://donut.push.network/address/0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c) | 16,564 | ✅ |
+| `urp` (Transparent proxy) | [`0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af`](https://donut.push.network/address/0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af) | 830 | ✅ |
+| `urpImplementation` (`UniversalRulesPolicy` 3.1.0) | [`0xA2391eee4C9EA1B32AEB3A460B77296EA709F02F`](https://donut.push.network/address/0xA2391eee4C9EA1B32AEB3A460B77296EA709F02F) | 24,326 | ✅ |
+| `urpProxyAdmin` (`ProxyAdmin`) | [`0x0b7a31ec85117892aEA90AA5cB6514e2F97c2295`](https://donut.push.network/address/0x0b7a31ec85117892aEA90AA5cB6514e2F97c2295) | 926 | ✅ |
+| `sessionValidator` (`AgentValidator`) | [`0x068EE2388475A98EE1f5a434C58bFF3444fffFe6`](https://donut.push.network/address/0x068EE2388475A98EE1f5a434C58bFF3444fffFe6) | 806 | ✅ |
+| `sessionEngine` (`SmartSession`, fork `7dc20e4`) | [`0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a`](https://donut.push.network/address/0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a) | 22,581 | ✅ |
 
-**All eight verified**, including the `urpProxyAdmin` that v2 could not verify.
+**All eight verified** on Blockscout. Keep `urpProxyAdmin`: without it URP can never be upgraded.
 
-## What changed from v2, and what it breaks
+### Push core contracts this deployment points at (not deployed by this repo)
 
-**Nobody declares a rules set's kind any more.** The owner names a **chain**; the wallet and URP each derive the kind from it, independently, from the same bytes.
+| | Address |
+|---|---|
+| `UniversalGatewayPC` | `0x00000000000000000000000000000000000000C1` (implementation `0x1e41…a659`, 8-field outbound request, selector `0x77b86bec`) |
+| `UniversalCore` | `0x00000000000000000000000000000000000000C0` |
+| `UEAFactory` | `0x00000000000000000000000000000000000000eA` |
+| `UNIVERSAL_EXECUTOR_MODULE` | `0x14191Ea54B4c176fCf86f51b0FAc7CB1E71Df7d7` (the address core's UniversalCore and PRC20s use; an account with no code) |
 
-| | v2 | v3.2 |
+## How to grant a rule (what changed from v3.2)
+
+| | v3.2 | v4 |
 |---|---|---|
-| Grant call | `grantRules(session, RulesType)` | **`grantRules(session)`** |
-| Policy `initData` | `abi.encode(uint8 mode, bytes body)` | **`abi.encode(string chainNamespace, bytes body)`** |
-| Body type | `Config` / `NativeConfig` | **`UniversalTerms` / `NativeTerms`** |
-| Who decides the kind | the caller, twice, unchecked | **nobody — derived twice, identically** |
-| Chain | recorded, never checked | **checked against the asset at grant** |
+| Policy `initData` | `abi.encode(string chainNamespace, bytes body)` | **`abi.encode(uint16 version, string chainNamespace, bytes body)`**, `version = 1` |
+| Tokens per cross-chain rule | exactly 1 (`asset`, `maxAmountPerCall`, `maxAmountTotal`) | **1 to 8** (`assets: AssetCap[]`), each with its own limits and spend counter |
+| PC fee limit | `maxPCPerCall` | **`maxGasPerCall`** (same meaning: PC per outbound for protocol fee + gas) |
+| Agent door | session signature through a validator | **`executeAsAgent(rulesId, mode, executionCalldata)`**, callable only by the rule's agent |
+| Owner-side changes | not recorded | **checkpoint counter** (`checkpointCount()`, `Checkpointed` event) |
 
-**Every v2 integration that encodes a grant will break, loudly.** The selector changed, so a v2 payload misses the function rather than failing a check. A v2 `initData` envelope decodes to an empty chain and reverts with a named `EmptyChain()`.
+Cross-chain body (EVM destination):
 
-**v2 rules sets do not carry over.** Every address is new.
-
-## The chain string
-
-For a **universal** rules set it must be byte-exact what the asset reports:
-
-```
-cast call <PRC20> 'SOURCE_CHAIN_NAMESPACE()(string)' --rpc-url <donut>
-# USDC.eth -> "eip155:11155111"
+```solidity
+struct AssetCap { address token; uint256 maxPerCall; uint256 maxTotal; }   // token = PRC20 on Push
+struct UniversalTerms {
+    uint48 validUntil; address expectedCEA; AssetCap[] assets; uint256 maxGasPerCall; AllowedCall[] allowedCalls;
+}
+// ABI tuple: (uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])
 ```
 
-URP asks the asset the same question at grant and refuses on a mismatch (`ChainMismatch`) or an asset that cannot answer (`InvalidAsset`).
+Rules that matter to integrators:
 
-For a **native** rules set it is this chain's own identifier, `"eip155:42101"` — and you can ask the contract rather than hard-coding it:
+- **Tokens are the PRC20 addresses on Push** (e.g. USDC.eth `0x7A58048036206bB898008b5bBDA85697DB1e5d66`), never the
+  destination chain's address. Every token's `SOURCE_CHAIN_NAMESPACE()` must equal the rule's chain.
+- **At least one token.** A cross-chain rule with no token is refused at grant (`AssetListOutOfRange(0)`): the gateway
+  routes by the token, so a rule without one has no destination chain. A rule that should move nothing lists the chain's
+  gas token with both limits at 0 (Sepolia: pETH `0x2971824Db68229D087931155C2b8bB820B275809`, from
+  `UniversalCore.gasTokenPRC20ByChainNamespace(chain)`).
+- **Unlimited is `type(uint256).max`; 0 means nothing may move.**
+- **Any other envelope version is refused** (`UnsupportedEnvelopeVersion`). A pre-version two-field envelope sent
+  through the wallet reverts in the wallet's decode.
+- Native (Push-side) rules use the same versioned envelope with this chain's identifier, `"eip155:42101"`:
 
 ```
-cast call 0xeAd99E254ACD64219d057400cdC2A2390bC74372 'pushChainHash()(bytes32)' --rpc-url <donut>
+cast call 0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af 'pushChainHash()(bytes32)' --rpc-url <donut>
 # -> 0x3d6bc1f1d3fb03065860265a8e93840b586e57075d956cd41b4319d040be87f9 == keccak256("eip155:42101")
 ```
 
-⚠️ **Near misses are not corrected.** `"EIP155:42101"` hashes to something else, derives the *other* kind, and is refused against the action targets — with a `RulesTypeMismatch` that names the target, not the string. The hash comparison is the whole rule; the contracts deliberately do not parse or normalise.
-
-⚠️ **Not the UEAFactory formula.** `keccak256(abi.encode("eip155","42101"))` is a different value for the same chain and belongs to UEA address prediction. Conflating the two is how the old `destChainHash` field accumulated four conventions.
-
-## Proof it works
-
-A real wallet, deployed through the real factory: [`0x1A02CC8Ed94a160D490D6851401F6F3879c69991`](https://donut.push.network/address/0x1A02CC8Ed94a160D490D6851401F6F3879c69991) (tx [`0x1f98c54b…`](https://donut.push.network/tx/0x1f98c54bb1ac4a51f094251d4eed295820dcbfed8b3336ef4f321b63f7727ad3), block 23,296,566).
-
-`isWallet` ✅ · `ownerOf` ✅ · `clone.RULES_POLICY()` → the proxy ✅ · `accountId()` → `push.agw.1.0.0` ✅
+Full design notes: `docs/1_AGW.md`, `docs/2_UniversalRulesPolicy.md`, `docs/multi-asset-review.md`.
 
 ## Admin
 
-Both authorities are the deployer EOA `0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7`, with a 48-hour factory admin delay.
+| Authority | Holder | How to change it |
+|---|---|---|
+| Factory `DEFAULT_ADMIN_ROLE` (factory upgrades) | deployer EOA `0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7` | `beginDefaultAdminTransfer(new)`, then the new admin calls `acceptDefaultAdminTransfer()` after the **48-hour** delay |
+| URP `ProxyAdmin` owner (URP upgrades) | deployer EOA `0xa89523351BE1e2De64937AA9AF61Ae06eAd199C7` | `transferOwnership(new)` on `0x0b7a…2295`, immediate |
+| Factory `PAUSER_ROLE` / `OPERATOR_ROLE` | **nobody yet** | the default admin must `grantRole` before the factory can be paused or unpaused |
 
-They are **different powers** and for production belong in **different** multisigs: the factory's `DEFAULT_ADMIN_ROLE` can strand counterfactually funded addresses; the URP ProxyAdmin owner can rewrite every gate in the security boundary.
+These are different powers, and for production they belong in different multisigs: the factory admin can strand
+counterfactually funded addresses; the URP ProxyAdmin owner can rewrite every gate in the security boundary.
+
+## How this deployment was verified
+
+- **Before deploying:** 599 tests passed, 0 failed; the size gate passed (URP 250 B under the limit); the deploy script
+  was rehearsed on a local fork of Donut with the real key.
+- **After deploying, against the live contracts** (read through a fork of Donut; nothing written on-chain):
+  - wiring: every address matches the record; URP reports `3.1.0` and Donut's chain identity;
+  - no proxy or implementation can be re-initialised;
+  - a real USDC.eth + pETH rule grants; a rule with no token is refused;
+  - an agent's payload-only call goes through the real gateway;
+  - URP upgrade (transparent proxy): a stranger is refused, the ProxyAdmin cannot call through, the owner upgrades and
+    the live rule survives;
+  - factory upgrade (UUPS): a stranger is refused, the logic refuses a direct call, the admin upgrades, the registry
+    survives and predicted addresses do not move.
+- **S-05** (`test/integration/25_deploymentRecord.t.sol`) fails on one assertion: it requires the executor module to
+  have code, and the correct Donut executor module has none. Pending a test fix; every other check above passed.
+- Deployment cost: 17,278,001 gas, 0.0194 PC.
+
+## Previous generation (retired)
+
+`v3.2` (factory `0x2578041963f692f8b51A137A1c7ddc0c84a8226A`, URP `0xeAd99E254ACD64219d057400cdC2A2390bC74372`) stays on
+chain but is no longer current. Its wallets and rules do not carry over; owners withdraw through the owner door. Its
+record is in `deployments/address-book-v3/`.
