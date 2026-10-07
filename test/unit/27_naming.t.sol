@@ -73,12 +73,14 @@ contract NamingTest is BaseTest {
         );
     }
 
-    /// @dev XOR of the wallet's 31 external selectors — taken from the CONTRACT, or as literals for the
+    /// @dev XOR of the wallet's 33 external selectors — taken from the CONTRACT, or as literals for the
     ///      four auto-getters — equals `type(IAGW).interfaceId`, so `IAGW` declares exactly the wallet's
     ///      surface. `assertSelectorSet` in the owner-door suite proves the contract has exactly these.
     function test_naming_IAGWIsTheWholeSurface() public pure {
-        bytes4[31] memory s = [
+        bytes4[33] memory s = [
             AGW.initializeAccount.selector,
+            AGW.setLabel.selector,
+            AGW.label.selector,
             AGW.execute.selector,
             AGW.grantRules.selector,
             AGW.grantRulesWithSig.selector,
@@ -114,7 +116,7 @@ contract NamingTest is BaseTest {
         for (uint256 i; i < s.length; ++i) {
             x ^= s[i];
         }
-        assertEq(x, type(IAGW).interfaceId, "IAGW declares exactly the wallet's 31 external functions");
+        assertEq(x, type(IAGW).interfaceId, "IAGW declares exactly the wallet's 33 external functions");
     }
 
     function test_naming_noLegacyVocabularyInABIs() public view {
