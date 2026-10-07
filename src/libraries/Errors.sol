@@ -34,6 +34,11 @@ library AGWErrors {
     ///      when any of the four wiring addresses is zero.
     error InvalidModuleAddress();
 
+    // ──────────────────────── label ────────────────────────
+
+    /// @dev `setLabel`, or a deploy with a label: the label is longer than `MAX_LABEL_BYTES` bytes.
+    error LabelTooLong(uint256 length);
+
     // ──────────────────── module manager ────────────────────
 
     error ModuleAlreadyInstalled(address module);

@@ -67,7 +67,8 @@ Six things make up the system. This chapter says what each one is, what it store
 - It has two doors:
 \t- **The owner door.** The owner can make the wallet do anything, send anything anywhere, with no checks at all. This is deliberate and is covered in chapter 3.
 \t- **The agent door** — a function called `executeAsAgent`. Only the permission's agent may call it, and the call only passes if every check in chapters 5 and 6 passes.
-- What the wallet stores: a grant counter used to make every permission unique (chapter 4), replay counters used only by the owner's own relayable signed-intent door, and a checkpoint counter that every owner-side change advances (chapter 4.5). The agent door keeps no state of its own.
+- What the wallet stores: a grant counter used to make every permission unique (chapter 4), replay counters used only by the owner's own relayable signed-intent door, a checkpoint counter that every owner-side change advances (chapter 4.5), and the owner's label. The agent door keeps no state of its own.
+- **Every wallet has a label**, a name for people, nothing more. The owner may pass one at creation or set it later with `setLabel` (at most 64 bytes); with none set the wallet reads as `AGW 1`, `AGW 2`, … by the owner's own wallet count. Only the owner can change it, the agent door cannot reach it, and renaming is not a checkpoint — no evaluator cares what a wallet is called. One limitation is accepted on purpose: when a relayer deploys a wallet on the owner's signature, the label is not part of what the owner signed, so the owner may have to rename it.
 - What it holds: the budgeted funds — the tokens the owner has decided to put under agent management, plus a little PC for gas on cross-chain calls.
 ## 2.3 The permission
 - A permission is **not a single record in one place**. It is written across three storage locations in one grant transaction:

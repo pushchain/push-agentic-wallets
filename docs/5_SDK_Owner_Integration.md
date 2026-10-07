@@ -1,11 +1,20 @@
 # AGW for the SDK — owner side
 
 What the SDK needs to create agentic wallets, grant and revoke rules, act as the owner, and read state, against the
-**v4 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
+**v5 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
 scope here.
 
-Everything below is taken from the deployed contracts (commit `e8db748`). ABIs: use the verified contracts on
+Everything below is taken from the deployed contracts (commit `2e61e13`). ABIs: use the verified contracts on
 [donut.push.network](https://donut.push.network), or the build artifacts in this repo (`out/<Contract>.sol/<Contract>.json`).
+Full address book: [`docs/addresses/donut.md`](addresses/donut.md).
+
+**What changed from v4:**
+- **New factory:** `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`. It is also the EIP-712 `verifyingContract`, so every
+  `OwnerIntent` must be signed for the new address (§7).
+- **New wallet implementation**, with a stored label (§3, [Label](#label)).
+- URP, SmartSession and AgentValidator keep their addresses, and rule encoding is unchanged.
+- Wallets from the v4 factory (`0xaF88…1aaF`) still work but have no label functions. Deploy new wallets only through
+  the v5 factory.
 
 ---
 
@@ -13,7 +22,7 @@ Everything below is taken from the deployed contracts (commit `e8db748`). ABIs: 
 
 | Contract | Address (Donut, chain id `42101`) | What the SDK does with it |
 |---|---|---|
-| **AGWFactory** (proxy) | `0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF` | Predict, deploy and look up wallets |
+| **AGWFactory** (proxy) | `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5` | Predict, deploy and look up wallets |
 | **AGW** (one per user) | address from `predictWallet` | Grant / revoke rules, owner actions, reads |
 | **URP** (proxy) | `0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af` | Named inside every rule; read rule terms and spend |
 | **SmartSession** (engine) | `0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a` | Read only: list a wallet's rules |
@@ -58,7 +67,8 @@ function deployWalletWithSig(OwnerIntent calldata intent, bytes calldata sig, st
 ```
 
 - `deployWallet` makes **the caller** the owner; there is no owner parameter.
-- `label` is emitted in `WalletDeployed`, **not stored** on-chain. Read it from events.
+- `label` is optional (`""` for the default) and is **stored on the wallet** (see [Label](#label)). It is also
+  emitted in `WalletDeployed`. Over 64 bytes, the deploy reverts `LabelTooLong(length)`.
 - Deploys revert while the factory is paused (`EnforcedPause`).
 
 ### Look up
@@ -71,6 +81,27 @@ function indexOf(address wallet) external view returns (uint256);    // reverts 
 
 To list an owner's wallets: indices `0 .. walletCount(owner)-1` through `predictWallet`, or the `WalletDeployed`
 events filtered by `owner`.
+
+### Label
+
+> Wallets from the retired v4 factory (`0xaF88…1aaF`) have no `label()` / `setLabel`; calling them reverts.
+
+```solidity
+function label() external view returns (string memory);   // on the wallet
+function setLabel(string calldata label) external;         // on the wallet; owner (or the wallet itself)
+event LabelSet(string label);
+```
+
+- **Every wallet has a label.** With none set, `label()` returns `"AGW <index + 1>"`, using the owner's own index:
+  an owner's wallets read `AGW 1`, `AGW 2`, … and another owner's first wallet is also `AGW 1`.
+- `setLabel` renames; `setLabel("")` resets to the default. At most **64 bytes** (bytes, not characters: 16
+  four-byte emoji fit), else `LabelTooLong(length)`. Anyone but the owner gets `CallerIsNotOwner`.
+- **Not a checkpoint.** A direct `setLabel` moves no counter. Sent through `execute` / `executeWithSig` (how a UEA
+  owner renames: an execute whose single call targets the wallet's own `setLabel`), only the owner-door call ticks.
+- `LabelSet` carries the label as passed (`""` on a reset). The deploy-time label is in `WalletDeployed`.
+- **The label is not signed in `deployWalletWithSig`**: the relayer passes it, so it can differ from what the owner
+  chose. It is cosmetic; the owner can fix it with `setLabel`.
+- `list()` / `info()` need one `eth_call` per wallet: `label()`. No event scan.
 
 ---
 
@@ -353,7 +384,7 @@ OwnerIntent(address owner,address wallet,address executor,uint96 index,bytes32 s
 ```
 
 Domain: `name "AGWFactory"`, `version "1"`, `chainId = signerChainId`, `verifyingContract = factory proxy`
-(`0xaF88…1aaF`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
+(`0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
 `factory.domainSeparator(signerChainId)` (or `wallet.domainSeparator(...)`, identical) before prompting.
 
 | Door | Contract | Fields it checks |
@@ -400,6 +431,7 @@ deployment.
 | Native terms + spend | `URP.getNativeConfig(configId, wallet)` → `{…, valueSpent, amountSpent, callsUsed, …}` |
 | Checkpoints | `wallet.checkpointCount()`, `wallet.lastCheckpointBlock()`, `Checkpointed` events |
 | Owner / factory | `wallet.owner()`, `wallet.factory()` |
+| Label | `wallet.label()` (the default `AGW <index + 1>` when none is set) |
 | Next grant nonce | `wallet.grantNonce()` |
 | Owner lane position | `wallet.getNonce(nonceKey)` |
 
@@ -428,8 +460,9 @@ chain, so a lookup by `(agent, chain)` can return more than one.
 
 | Contract | Event | Notes |
 |---|---|---|
-| Factory | `WalletDeployed(address indexed owner, uint256 indexed index, address indexed wallet, string label)` | The only place `label` lives |
+| Factory | `WalletDeployed(address indexed owner, uint256 indexed index, address indexed wallet, string label)` | The label as passed at deploy (`""` = default) |
 | Wallet | `AccountInitialized(address indexed owner, address indexed engine)` | Emitted once at deploy |
+| Wallet | `LabelSet(string label)` | `setLabel`; `""` = reset to the default |
 | Wallet | `RulesGranted(bytes32 indexed rulesId, uint8 mode, bytes32 indexed chainHash, string chainNamespace)` | `mode`: 0 cross-chain, 1 native |
 | Wallet | `RulesRevoked(bytes32 indexed rulesId)` | Once per revoked id |
 | Wallet | `OwnerExecuted(bytes32 indexed mode, bytes32 executionCalldataHash)` | `execute` |
@@ -448,7 +481,8 @@ in full (they come through the wallet).
 
 | When | Errors |
 |---|---|
-| **Deploy** | `IndexMismatch(expected, provided)`, `IntentWalletMismatch`, `ExecutorMismatch`, `SignatureExpired`, `InvalidOwnerSignature`, `EnforcedPause` |
+| **Deploy** | `IndexMismatch(expected, provided)`, `IntentWalletMismatch`, `ExecutorMismatch`, `SignatureExpired`, `InvalidOwnerSignature`, `EnforcedPause`, `LabelTooLong(length)` |
+| **Label** | `LabelTooLong(length)`, `CallerIsNotOwner` |
 | **Grant: session shape** (wallet) | `MalformedSessionShape`, `TooManyActions(n)`, `DuplicateAction(target, selector)`, `ForbiddenActionTarget(target)`, `ForbiddenActionSelector(selector)`, `RulesTypeMismatch(mode, actionIndex, target)`, `EmptyChain`, `InconsistentChain(actionIndex)`, `CallerIsNotOwner` |
 | **Grant: envelope** (URP) | `UnsupportedEnvelopeVersion(firstWord)`, `EmptyChain`, `UnsupportedNamespace(chainHash)` (chain is neither `eip155:` nor `solana:`; declared in `PushChainLib`) |
 | **Grant: cross-chain terms** (URP) | `AssetListOutOfRange(length)`, `DuplicateAsset(token)`, `InvalidAsset(token)`, `ChainMismatch(declared, assetChain)`, `InvalidConfigField`, `AllowListOutOfRange(length)`, `InvalidExpiry(validUntil)` |
@@ -475,6 +509,7 @@ A call made inside an owner action that reverts bubbles its own revert data up u
 | `validUntil` | non-zero, in the future; `type(uint48).max` = never |
 | Unlimited total | `type(uint256).max` (0 means nothing) |
 | Envelope version | 1 |
+| Wallet label | 0 to 64 bytes (`""` = the default `AGW <index + 1>`) |
 
 ## 13. Checklist before sending a grant
 

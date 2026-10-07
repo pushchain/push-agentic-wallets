@@ -793,7 +793,7 @@ contract ReenteringWallet {
         LATCH = latch;
     }
 
-    function initializeAccount() external {
+    function initializeAccount(string calldata) external {
         // `msg.sender` here IS the factory. Re-enter exactly once, globally.
         if (!ReenteringWallet(payable(address(this))).LATCH().tryFire()) return;
         spawned = AGWFactory(msg.sender).deployWallet("reentrant");
@@ -821,7 +821,7 @@ contract ReenteringOwner {
 contract RevertingInitWallet {
     error InitRejected();
 
-    function initializeAccount() external pure {
+    function initializeAccount(string calldata) external pure {
         revert InitRejected();
     }
 }

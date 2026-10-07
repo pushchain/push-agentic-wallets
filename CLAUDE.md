@@ -74,7 +74,14 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
 ```
 
 Requires `UNIVERSAL_GATEWAY_PC`, `UNIVERSAL_EXECUTOR_MODULE`, `CHAIN_ID`, and `FACTORY_ADMIN` off local
-chains. See `.env.example`. The script asks the chain for its id and reverts on a mismatch with `CHAIN_ID`.
+chains, plus `UEA_FACTORY` (the chain-identity check; `0x…eA` on Donut). See `.env.example`. The script asks the
+chain for its id and reverts on a mismatch with `CHAIN_ID`.
+
+When only `AGW` and `AGWFactory` change, `script/DeployWalletAndFactory.s.sol` deploys just the wallet implementation,
+factory logic and a new factory proxy over the existing engine, URP and validator (`SESSION_ENGINE`, `URP`,
+`SESSION_VALIDATOR` env vars). None of those three stores a factory address, so nothing else needs updating; the
+core repo's `RulesBindingHook` and `UniversalMarketplace` do store it (set at `initialize`, no setter). Current
+addresses: `docs/addresses/donut.md`.
 
 ## The system in one pass
 

@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
 import { IERC165 } from "forge-std/interfaces/IERC165.sol";
 
 import { ISmartSession } from "smartsessions/ISmartSession.sol";
@@ -12,6 +13,7 @@ import { IModule as IERC7579Module } from "erc7579/interfaces/IERC7579Module.sol
 
 import { IAgentValidator } from "./interfaces/IAgentValidator.sol";
 import { IAGW } from "./interfaces/IAGW.sol";
+import { IAGWFactory } from "./interfaces/IAGWFactory.sol";
 import { ISmartSessionConfigReader } from "./interfaces/ISmartSessionConfigReader.sol";
 import { AGWErrors } from "./libraries/Errors.sol";
 import { AgentConfigLib } from "./libraries/AgentConfigLib.sol";
@@ -23,6 +25,7 @@ import {
     SEND_OUTBOUND_SELECTOR,
     RulesType,
     CheckpointKind,
+    MAX_LABEL_BYTES,
     ENGINE_FALLBACK_TARGET,
     ENGINE_FALLBACK_SELECTOR,
     ENGINE_FALLBACK_SELECTOR_SMARTSESSION
@@ -116,6 +119,9 @@ contract AGW is IAGW, ReentrancyGuardTransient {
     /// @dev Owner replay lanes for `executeWithSig`: lane key => next expected sequence number.
     mapping(uint192 => uint64) private _nonces;
 
+    /// @dev The owner's label for this wallet; empty means the default `AGW <index + 1>`.
+    string private _label;
+
     /**
      * @notice Sets the wallet's permanent wiring and locks the implementation itself.
      *
@@ -151,7 +157,7 @@ contract AGW is IAGW, ReentrancyGuardTransient {
 
     /**
      * @dev Reverts unless the caller is the owner or the wallet itself. Applied to the three
-     *      lifecycle functions only.
+     *      lifecycle functions and `setLabel` only.
      *
      *      - A batch entry targeting the wallet arrives with `msg.sender == address(this)`, so
      *        without this the owner's own one-signature change batch reverts against itself.
@@ -225,12 +231,17 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      *           and bubbles any revert, so the factory's deploy transaction unwinds atomically.
      *         - Emits `ModuleInstalled`, then `AccountInitialized`.
      *         - Session data is never passed here; grants travel only through `grantRules`.
+     *         - Stores `label_` when it is non-empty; an empty label costs no write and reads as the
+     *           default. An over-long label reverts `LabelTooLong` and unwinds the whole deploy.
+     *
+     * @param  label_  The deploy-time label; empty for the default `AGW <index + 1>`.
      */
-    function initializeAccount() external {
+    function initializeAccount(string calldata label_) external {
         if (msg.sender != _factory()) revert AGWErrors.CallerIsNotFactory();
         if (_initialized) revert AGWErrors.AlreadyInitialized();
 
         _initialized = true;
+        if (bytes(label_).length != 0) _setLabel(label_);
         _installedValidators[SESSION_ENGINE] = true;
 
         IERC7579Module(SESSION_ENGINE).onInstall("");
@@ -432,6 +443,32 @@ contract AGW is IAGW, ReentrancyGuardTransient {
         if (!OwnerAuthLib.isOwnerSig(owner_, OwnerAuthLib.intentDigest(_factory(), intent), sig)) {
             revert AGWErrors.InvalidOwnerSignature();
         }
+    }
+
+    /**
+     * @notice Sets the wallet's label. `""` resets it to the default `AGW <index + 1>`.
+     *
+     * @dev    - Reverts unless the caller is the owner or the wallet itself, so a UEA owner can rename
+     *           through `executeWithSig`. The agent door never reaches it: its dispatch guard refuses
+     *           the wallet as a target.
+     *         - Reverts `LabelTooLong` above `MAX_LABEL_BYTES` bytes.
+     *         - Cosmetic metadata: writes NO checkpoint (a rename sent through `execute` still ticks
+     *           once, for the owner-door call itself). Makes no external call.
+     *         - Emits `LabelSet` with the label as passed.
+     *
+     * @param  label_  The new label, or `""` for the default.
+     */
+    function setLabel(string calldata label_) external onlyOwnerOrSelf {
+        _setLabel(label_);
+        emit LabelSet(label_);
+    }
+
+    /// @dev The one place the label is written and its length checked; the deploy path and `setLabel`
+    ///      both come through here, so the cap cannot diverge between them.
+    function _setLabel(string calldata label_) private {
+        uint256 length = bytes(label_).length;
+        if (length > MAX_LABEL_BYTES) revert AGWErrors.LabelTooLong(length);
+        _label = label_;
     }
 
     /**
@@ -1064,6 +1101,17 @@ contract AGW is IAGW, ReentrancyGuardTransient {
     /// @notice The factory that deployed this wallet.
     function factory() external view returns (address) {
         return _factory();
+    }
+
+    /**
+     * @notice The wallet's label: the owner's, or `AGW <index + 1>` when none is set.
+     * @dev    The default is computed, never stored, from the factory's per-owner index — so an
+     *         owner's wallets read `AGW 1`, `AGW 2`, … A view only: no door ever calls it.
+     * @return The label.
+     */
+    function label() external view returns (string memory) {
+        if (bytes(_label).length != 0) return _label;
+        return string.concat("AGW ", Strings.toString(IAGWFactory(_factory()).indexOf(address(this)) + 1));
     }
 
     /**
