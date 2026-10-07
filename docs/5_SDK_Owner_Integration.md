@@ -1,11 +1,20 @@
 # AGW for the SDK — owner side
 
 What the SDK needs to create agentic wallets, grant and revoke rules, act as the owner, and read state, against the
-**v4 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
+**v5 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
 scope here.
 
-Everything below is taken from the deployed contracts (commit `e8db748`). ABIs: use the verified contracts on
+Everything below is taken from the deployed contracts (commit `2e61e13`). ABIs: use the verified contracts on
 [donut.push.network](https://donut.push.network), or the build artifacts in this repo (`out/<Contract>.sol/<Contract>.json`).
+Full address book: [`docs/addresses/donut.md`](addresses/donut.md).
+
+**What changed from v4:**
+- **New factory:** `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`. It is also the EIP-712 `verifyingContract`, so every
+  `OwnerIntent` must be signed for the new address (§7).
+- **New wallet implementation**, with a stored label (§3, [Label](#label)).
+- URP, SmartSession and AgentValidator keep their addresses, and rule encoding is unchanged.
+- Wallets from the v4 factory (`0xaF88…1aaF`) still work but have no label functions. Deploy new wallets only through
+  the v5 factory.
 
 ---
 
@@ -13,7 +22,7 @@ Everything below is taken from the deployed contracts (commit `e8db748`). ABIs: 
 
 | Contract | Address (Donut, chain id `42101`) | What the SDK does with it |
 |---|---|---|
-| **AGWFactory** (proxy) | `0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF` | Predict, deploy and look up wallets |
+| **AGWFactory** (proxy) | `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5` | Predict, deploy and look up wallets |
 | **AGW** (one per user) | address from `predictWallet` | Grant / revoke rules, owner actions, reads |
 | **URP** (proxy) | `0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af` | Named inside every rule; read rule terms and spend |
 | **SmartSession** (engine) | `0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a` | Read only: list a wallet's rules |
@@ -75,7 +84,7 @@ events filtered by `owner`.
 
 ### Label
 
-> **From the v5 deployment.** The v4 wallets on Donut have no `label()` / `setLabel`.
+> Wallets from the retired v4 factory (`0xaF88…1aaF`) have no `label()` / `setLabel`; calling them reverts.
 
 ```solidity
 function label() external view returns (string memory);   // on the wallet
@@ -375,7 +384,7 @@ OwnerIntent(address owner,address wallet,address executor,uint96 index,bytes32 s
 ```
 
 Domain: `name "AGWFactory"`, `version "1"`, `chainId = signerChainId`, `verifyingContract = factory proxy`
-(`0xaF88…1aaF`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
+(`0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
 `factory.domainSeparator(signerChainId)` (or `wallet.domainSeparator(...)`, identical) before prompting.
 
 | Door | Contract | Fields it checks |
