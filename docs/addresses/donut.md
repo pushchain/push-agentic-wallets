@@ -100,8 +100,10 @@ counterfactually funded addresses; the URP ProxyAdmin owner can rewrite every ga
 
 - **`v4`** (factory `0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF`, wallet implementation
   `0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c`) is no longer current. Deploy new wallets only through the v5 factory.
-  v4 wallets keep working, because URP and the engine are shared, but they have no `label()` / `setLabel`. Record:
-  `deployments/address-book-v4/`.
+  v4 wallets keep working, because URP and the engine are shared, but they have no `label()` / `setLabel`.
 - **`v3.2`** (factory `0x2578041963f692f8b51A137A1c7ddc0c84a8226A`, URP `0xeAd99E254ACD64219d057400cdC2A2390bC74372`)
   stays on chain but is no longer current. Its wallets and rules do not carry over; owners withdraw through the owner
-  door. Record: `deployments/address-book-v3/`.
+  door.
+
+Only the current deployment's book is kept in the repo (`deployments/address-book-v5/`). Earlier generations' books are
+in git history.

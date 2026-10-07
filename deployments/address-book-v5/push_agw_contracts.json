@@ -123,6 +123,6 @@
     "factoryProxy": "0xaF88D0FD947afAe7bBb8F34e8417DCfc165e1aaF",
     "factoryLogic": "0xe138Dc6EfC10233BE1e6c8aF1Caf8cABe599cfC2",
     "walletImplementation": "0x96D69ec7e6cDdaD414e656B5c9DCA24587DF713c",
-    "note": "v4 wallets keep working against the same URP and engine but have no label functions. Record: deployments/address-book-v4/."
+    "note": "v4 wallets keep working against the same URP and engine but have no label functions. Earlier address books are in git history."
   }
 }
