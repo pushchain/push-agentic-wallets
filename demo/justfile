@@ -1,0 +1,260 @@
+# Push Agentic Wallet — demo runner
+#
+# Every recipe wraps one script with the right chain, key and verbosity, so nobody types a
+# 200-character invocation in front of an audience.
+#
+#   just preflight        # run at T-1 hour AND five minutes before presenting
+#   just setup            # tokens, quote, funding (incl. the agent's gas), preflight
+#   just act1             # off-camera: Bob arrives, the wallet is built, the rules are granted
+#   just state            # run between every act
+#   just act2             # the central beat: the agent sends its own transaction
+#   just g1 .. just g7    # the gauntlet — simulations, no chain writes, freely re-runnable
+#   just act4a .. act4e   # the boundary
+#
+# EVERY BROADCASTING RECIPE HAS A `-dry` VARIANT that broadcasts nothing. Use them during
+# rehearsal; a dry run costs nothing and catches a bad payload before it costs an act. A dry run
+# still writes the demo ledger (demo/state/ledger.json), exactly as the live recipe would.
+#
+# Run from the repo root: `just -f demo/justfile <recipe>`, or `cd demo && just <recipe>`.
+
+set dotenv-load := true
+set dotenv-filename := "../.env"
+set working-directory := ".."
+
+donut := env_var_or_default("PUSH_DONUT_RPC_URL", "")
+sepolia := env_var_or_default("SEPOLIA_RPC_URL", "")
+
+# `forge script` prints its own preamble and traces. -vv is the quietest level that still shows
+# console.log output, which is the only thing the audience should see.
+_v := "-vv"
+
+_donut := "--rpc-url " + donut + " " + _v
+
+# Sepolia broadcasts get triple the simulated gas. forge sizes each transaction from its LOCAL
+# simulation times 1.3, and for the Sepolia USDC `approve` that came to 64,784 gas where the
+# network needs about 130,000: the approve ran out of gas, and the bridge transaction behind it
+# failed with no allowance. Sepolia gas is cheap enough that the headroom costs nothing.
+_sepolia := "--rpc-url " + sepolia + " " + _v + " --gas-estimate-multiplier 300"
+_go := "--broadcast"
+
+default:
+    @just --list --unsorted
+
+# ───────────────────────────────── preflight ─────────────────────────────────
+
+# The green/red checklist. Detects its own phase from the ledger.
+preflight:
+    forge script demo/script/Preflight.s.sol:Preflight {{_donut}}
+
+# The PC arithmetic. Run before Act 1 AND again immediately before Act 2.
+quote:
+    forge script demo/script/00_setup/01_Quote.s.sol:Quote {{_donut}}
+
+# Assert the token pair before it can waste an act.
+tokens:
+    forge script demo/script/00_setup/00_AssertTokens.s.sol:AssertTokens {{_donut}}
+
+# ─────────────────────────────────── setup ───────────────────────────────────
+
+# Move USDC from Bob to the deployer for the reward pool. Skips itself while the pool is funded.
+fund:
+    forge script demo/script/00_setup/03_FundAll.s.sol:FundAll {{_sepolia}} {{_go}}
+
+fund-dry:
+    forge script demo/script/00_setup/03_FundAll.s.sol:FundAll {{_sepolia}}
+
+# Deploy StakeDummy and fund its reward pool. Skips itself while the recorded one is live.
+stakedummy:
+    forge script demo/script/00_setup/02_DeployStakeDummy.s.sol:DeployStakeDummy {{_sepolia}} {{_go}}
+
+stakedummy-dry:
+    forge script demo/script/00_setup/02_DeployStakeDummy.s.sol:DeployStakeDummy {{_sepolia}}
+
+# Top the agent up with PC for its own gas. The agent sends its own transactions.
+fund-agent:
+    forge script demo/script/00_setup/07_FundAgentPC.s.sol:FundAgentPC {{_donut}} {{_go}}
+
+fund-agent-dry:
+    forge script demo/script/00_setup/07_FundAgentPC.s.sol:FundAgentPC {{_donut}}
+
+# T-1 hour. `fund` and `stakedummy` do nothing while the recorded StakeDummy is live and funded.
+setup: tokens quote fund stakedummy fund-agent preflight
+
+# ────────────────────────────────── act 1 ──────────────────────────────────
+
+# The whole of Act 1, in order. Runs off-camera: it holds the only Ethereum transaction and the
+# longest relay wait.
+act1: act1a act1b act1c act1d act1e
+
+# The ONLY Ethereum transaction. Prints the prediction block, bridges the capital.
+act1a:
+    forge script demo/script/01_bob/10_Arrive.s.sol:Arrive {{_sepolia}} {{_go}}
+
+act1a-dry:
+    forge script demo/script/01_bob/10_Arrive.s.sol:Arrive {{_sepolia}}
+
+# Bob signs, a stranger submits: the wallet is deployed, funded and armed.
+act1b:
+    forge script demo/script/01_bob/11_ArriveComplete.s.sol:ArriveComplete {{_donut}} {{_go}}
+
+act1b-dry:
+    forge script demo/script/01_bob/11_ArriveComplete.s.sol:ArriveComplete {{_donut}}
+
+# The PC seam — the one thing Bob cannot do from Ethereum.
+act1c:
+    forge script demo/script/01_bob/12_FundAGWWithPC.s.sol:FundAGWWithPC {{_donut}} {{_go}}
+
+act1c-dry:
+    forge script demo/script/01_bob/12_FundAGWWithPC.s.sol:FundAGWWithPC {{_donut}}
+
+# The destination-chain approval. Also deploys the CEA.
+act1d:
+    forge script demo/script/01_bob/13_ApproveStakeDummyOnCEA.s.sol:ApproveStakeDummyOnCEA {{_donut}} {{_go}}
+
+act1d-dry:
+    forge script demo/script/01_bob/13_ApproveStakeDummyOnCEA.s.sol:ApproveStakeDummyOnCEA {{_donut}}
+
+# The rules. The summary it prints is where the live demo opens.
+act1e:
+    forge script demo/script/01_bob/14_GrantRules.s.sol:GrantRules {{_donut}} {{_go}}
+
+act1e-dry:
+    forge script demo/script/01_bob/14_GrantRules.s.sol:GrantRules {{_donut}}
+
+# ────────────────────────────────── act 2 ──────────────────────────────────
+
+# THE CENTRAL BEAT. The agent sends its own transaction; the money crosses.
+act2:
+    forge script demo/script/02_agent/20_Stake.s.sol:Stake {{_donut}} {{_go}}
+
+act2-dry:
+    forge script demo/script/02_agent/20_Stake.s.sol:Stake {{_donut}}
+
+# ───────────────────────────────── the gauntlet ─────────────────────────────────
+
+# All seven are SIMULATIONS, sent as the agent: no broadcast, no state change, freely re-runnable.
+# They need no relay either, which makes them the right thing to run while a cross-chain hop is in
+# flight.
+
+# G1 · a function nobody allow-listed. URP gate 15.
+g1:
+    forge script demo/script/03_gauntlet/30_G1_NotAllowListed.s.sol:G1_NotAllowListed {{_donut}}
+
+# G2 · the agent aims at its own CEA. URP gate 14.
+g2:
+    forge script demo/script/03_gauntlet/31_G2_ForbiddenCEA.s.sol:G2_ForbiddenCEA {{_donut}}
+
+# G3 · the agent stakes for itself. URP gate 15, the beneficiary pin.
+g3:
+    forge script demo/script/03_gauntlet/32_G3_BeneficiaryMismatch.s.sol:G3_BeneficiaryMismatch {{_donut}}
+
+# G4 · over the per-action cap. URP gate 6.
+g4:
+    forge script demo/script/03_gauntlet/33_G4_PerCallCap.s.sol:G4_PerCallCap {{_donut}}
+
+# G5 · the lifetime cap. URP gate 7. MUST run after act2 — it needs the spend counter to have moved.
+g5:
+    forge script demo/script/03_gauntlet/34_G5_LifetimeCap.s.sol:G5_LifetimeCap {{_donut}}
+
+# G6 · someone else sends the agent's exact request. Refused by the WALLET, before any policy.
+g6:
+    forge script demo/script/03_gauntlet/35_G6_Impostor.s.sol:G6_Impostor {{_donut}}
+
+# G7 · a token the rules do not list. URP gate 5.
+g7:
+    forge script demo/script/03_gauntlet/36_G7_UnlistedToken.s.sol:G7_UnlistedToken {{_donut}}
+
+# Everything that needs no Act 2. Run g5 separately, after act2.
+gauntlet: g1 g2 g3 g4 g6 g7
+
+# ────────────────────────────────── act 4 ──────────────────────────────────
+
+# The agent unwinds. A zero-amount request: meters nothing.
+act4a:
+    forge script demo/script/04_boundary/40_AgentUnstake.s.sol:AgentUnstake {{_donut}} {{_go}}
+
+act4a-dry:
+    forge script demo/script/04_boundary/40_AgentUnstake.s.sol:AgentUnstake {{_donut}}
+
+# The agent tries to bring it home. Simulation — run it immediately before act4c.
+act4b:
+    forge script demo/script/04_boundary/41_AgentRepatriateFails.s.sol:AgentRepatriateFails {{_donut}}
+
+# The SAME call, made by the owner. Succeeds.
+act4c:
+    forge script demo/script/04_boundary/42_OwnerRepatriate.s.sol:OwnerRepatriate {{_donut}} {{_go}}
+
+act4c-dry:
+    forge script demo/script/04_boundary/42_OwnerRepatriate.s.sol:OwnerRepatriate {{_donut}}
+
+# The closing table. The last thing the audience sees.
+act4d:
+    forge script demo/script/04_boundary/43_OwnerWithdraw.s.sol:OwnerWithdraw {{_donut}} {{_go}}
+
+act4d-dry:
+    forge script demo/script/04_boundary/43_OwnerWithdraw.s.sol:OwnerWithdraw {{_donut}}
+
+# Bob revokes; then the agent's own request is refused at the wallet (simulated).
+act4e:
+    forge script demo/script/04_boundary/44_RevokeAll.s.sol:RevokeAll {{_donut}} {{_go}}
+
+act4e-dry:
+    forge script demo/script/04_boundary/44_RevokeAll.s.sol:RevokeAll {{_donut}}
+
+# ─────────────────────────────────── state ───────────────────────────────────
+
+# Both chains, one screen. RUN BETWEEN EVERY ACT.
+state:
+    forge script demo/script/05_inspect/52_StateBoth.s.sol:StateBoth {{_donut}}
+
+state-push:
+    forge script demo/script/05_inspect/50_StatePush.s.sol:StatePush {{_donut}}
+
+state-sepolia:
+    forge script demo/script/05_inspect/51_StateSepolia.s.sol:StateSepolia {{_donut}}
+
+# ─────────────────────────────────── watch ───────────────────────────────────
+
+# Poll for a cross-chain hop to land. WATCH_TIMEOUT (seconds) overrides the 5-minute default.
+
+watch-cea:
+    WATCH=cea forge script demo/script/Watch.s.sol:Watch {{_donut}}
+
+watch-staked:
+    WATCH=staked forge script demo/script/Watch.s.sol:Watch {{_donut}}
+
+watch-unstaked:
+    WATCH=unstaked forge script demo/script/Watch.s.sol:Watch {{_donut}}
+
+watch-returned:
+    WATCH=returned forge script demo/script/Watch.s.sol:Watch {{_donut}}
+
+# ─────────────────────────────────── reset ───────────────────────────────────
+
+# REHEARSAL RECOVERY ONLY. Revokes every rules set and clears the ledger's rules keys, so a
+# rehearsal can restart without redeploying. The wallet keeps its funds, its owner and its address.
+reset:
+    forge script demo/script/99_reset/90_RevokeAll.s.sol:Reset {{_donut}} {{_go}}
+
+reset-dry:
+    forge script demo/script/99_reset/90_RevokeAll.s.sol:Reset {{_donut}}
+
+# ─────────────────────────────────── tests ───────────────────────────────────
+
+test:
+    FOUNDRY_PROFILE=demo forge test
+
+test-v:
+    FOUNDRY_PROFILE=demo forge test -vv
+
+build:
+    FOUNDRY_PROFILE=demo forge build
+
+fmt:
+    forge fmt demo/
+
+# ─────────────────────────────────── the mock ───────────────────────────────────
+
+# The standup mock. No chain. Shows the agent and relayer addresses only if their keys are set.
+demo101:
+    forge script demo/script/Demo101.s.sol:Demo101
