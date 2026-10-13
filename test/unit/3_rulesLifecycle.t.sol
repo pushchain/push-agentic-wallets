@@ -66,7 +66,8 @@ contract PushAgentWalletLifecycleTest is BaseTest {
             selector: bytes4(keccak256("swap(uint256,address)")),
             beneficiaryOffset: 36,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({
@@ -384,7 +385,12 @@ contract PushAgentWalletLifecycleTest is BaseTest {
     function test_W24_ShapeCheckDoesNotValidateUrpContents() public {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: _addr("p"), selector: bytes4(0x11223344), beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0
+            target: _addr("p"),
+            selector: bytes4(0x11223344),
+            beneficiaryOffset: 0,
+            hasBeneficiary: false,
+            maxValue: 0,
+            pins: noPins()
         });
         Config memory bad = Config({
             initialized: false,

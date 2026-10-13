@@ -115,7 +115,12 @@ contract CheckpointsTest is BaseTest {
     function _urpInitData() internal view returns (bytes memory) {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: protocol, selector: SWAP_SELECTOR, beneficiaryOffset: 36, hasBeneficiary: true, maxValue: 1 ether
+            target: protocol,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: 36,
+            hasBeneficiary: true,
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({

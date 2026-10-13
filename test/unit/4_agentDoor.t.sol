@@ -117,7 +117,8 @@ contract PushAgentWalletAgentDoorTest is BaseTest {
             selector: SWAP_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({

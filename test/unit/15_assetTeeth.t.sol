@@ -60,8 +60,9 @@ contract URPTeethTest is BaseTest {
 
     function _config(address asset) internal view returns (Config memory cfg) {
         AllowedCall[] memory calls = new AllowedCall[](1);
-        calls[0] =
-            AllowedCall({ target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0 });
+        calls[0] = AllowedCall({
+            target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0, pins: noPins()
+        });
 
         cfg = Config({
             initialized: false,

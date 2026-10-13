@@ -16,6 +16,7 @@ import {
     MAX_PINS,
     ModeSlot,
     NativeConfig,
+    PinOp,
     RulesType,
     VALUE_SELECTOR
 } from "../../src/libraries/Types.sol";
@@ -64,7 +65,7 @@ contract URPNativeTest is BaseTest {
     /// @dev The canonical native config: one pin (beneficiary == the wallet), amount metered.
     function _nativeConfig() internal view returns (NativeConfig memory cfg) {
         ArgPin[] memory pins = new ArgPin[](1);
-        pins[0] = ArgPin({ offset: PIN_OFFSET, expected: bytes32(uint256(uint160(ACCOUNT))) });
+        pins[0] = ArgPin({ offset: PIN_OFFSET, op: PinOp.EQ, value: bytes32(uint256(uint160(ACCOUNT))) });
 
         cfg = NativeConfig({
             initialized: false,
@@ -206,7 +207,7 @@ contract URPNativeTest is BaseTest {
         NativeConfig memory cfg = _nativeConfig();
         cfg.pins = new ArgPin[](MAX_PINS);
         for (uint256 i; i < MAX_PINS; ++i) {
-            cfg.pins[i] = ArgPin({ offset: uint16(4 + i * 32), expected: bytes32(i) });
+            cfg.pins[i] = ArgPin({ offset: uint16(4 + i * 32), op: PinOp.EQ, value: bytes32(i) });
         }
         _initNative(CID, cfg);
         assertEq(_cfg(CID).pins.length, MAX_PINS, "MAX_PINS is inclusive");
@@ -218,7 +219,7 @@ contract URPNativeTest is BaseTest {
     function test_native_init_rejectsValueOnlyWithPins() public {
         NativeConfig memory cfg = _valueOnlyConfig();
         cfg.pins = new ArgPin[](1);
-        cfg.pins[0] = ArgPin({ offset: 4, expected: bytes32(0) });
+        cfg.pins[0] = ArgPin({ offset: 4, op: PinOp.EQ, value: bytes32(0) });
         vm.prank(address(engine));
         vm.expectRevert(UniversalRulesPolicyErrors.ValueOnlyWithPins.selector);
         urp.initializeWithMultiplexer(ACCOUNT, CID, nativeInitData(cfg));
@@ -259,7 +260,7 @@ contract URPNativeTest is BaseTest {
 
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: STAKE, selector: STAKE_FOR, beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0
+            target: STAKE, selector: STAKE_FOR, beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0, pins: noPins()
         });
         Config memory u = Config({
             initialized: false,
@@ -393,7 +394,7 @@ contract URPNativeTest is BaseTest {
     /// precisely so a large uint16 offset cannot wrap.
     function test_native_N7_calldataTooShortForPin() public {
         NativeConfig memory cfg = _nativeConfig();
-        cfg.pins[0] = ArgPin({ offset: 1000, expected: bytes32(uint256(uint160(ACCOUNT))) });
+        cfg.pins[0] = ArgPin({ offset: 1000, op: PinOp.EQ, value: bytes32(uint256(uint160(ACCOUNT))) });
         cfg.amount.enabled = false;
         _initNative(CID, cfg);
 
@@ -744,7 +745,7 @@ contract URPNativeTest is BaseTest {
     function _initUniversalAt(ConfigId id) internal {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: STAKE, selector: STAKE_FOR, beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0
+            target: STAKE, selector: STAKE_FOR, beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0, pins: noPins()
         });
         Config memory u = Config({
             initialized: false,

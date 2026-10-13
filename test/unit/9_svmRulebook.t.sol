@@ -13,7 +13,7 @@ import {
     STAKE_PROGRAM,
     BPF_LOADER_UPGRADEABLE,
     ADDRESS_LOOKUP_TABLE
-} from "../../src/policies/UniversalRulesPolicy.sol";
+} from "../../src/policies/SvmRulebook.sol";
 import { IUniversalRulesPolicy } from "../../src/interfaces/IUniversalRulesPolicy.sol";
 import { PushChainLib } from "../../src/libraries/PushChainLib.sol";
 import { AGW } from "../../src/AGW.sol";
@@ -521,7 +521,12 @@ contract URPSvmTest is BaseTest {
         MockPRC20 sepoliaAsset = new MockPRC20();
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: makeAddr("router"), selector: 0x12345678, beneficiaryOffset: 36, hasBeneficiary: false, maxValue: 0
+            target: makeAddr("router"),
+            selector: 0x12345678,
+            beneficiaryOffset: 36,
+            hasBeneficiary: false,
+            maxValue: 0,
+            pins: noPins()
         });
         Config memory cfg = Config({
             initialized: false,

@@ -54,8 +54,9 @@ contract URPEnvelopeTest is BaseTest {
 
     function _universalCfg() internal view returns (Config memory cfg) {
         AllowedCall[] memory calls = new AllowedCall[](1);
-        calls[0] =
-            AllowedCall({ target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0 });
+        calls[0] = AllowedCall({
+            target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0, pins: noPins()
+        });
         cfg.validUntil = VALID_UNTIL;
         cfg.expectedCEA = CEA;
         cfg.assets = oneAsset(ASSET, 100e6, 1000e6);

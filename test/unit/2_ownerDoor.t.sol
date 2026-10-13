@@ -106,7 +106,8 @@ contract PushAgentWalletTest is BaseTest {
             selector: bytes4(keccak256("swap(uint256,address)")),
             beneficiaryOffset: 36,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({

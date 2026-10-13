@@ -85,7 +85,8 @@ contract PushAgentWalletOwnerIntentTest is BaseTest {
             selector: bytes4(keccak256("swap(uint256,address)")),
             beneficiaryOffset: 36,
             hasBeneficiary: true,
-            maxValue: 0
+            maxValue: 0,
+            pins: noPins()
         });
         return canonicalSession(
             agentConfig(agentAddr),

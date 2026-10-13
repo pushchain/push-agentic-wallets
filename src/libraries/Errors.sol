@@ -294,8 +294,13 @@ library UniversalRulesPolicyErrors {
     error ValueOnlyWithPins();
     /// @dev init: a value-only config carrying an amount rule. Same reasoning.
     error ValueOnlyWithAmountRule();
-    /// @dev init: pins.length > MAX_PINS.
+    /// @dev init: pins.length > MAX_PINS. Raised per allowed call on the EVM side, and for the
+    ///      native pin array.
     error TooManyPins(uint256 count);
+    /// @dev init, universal EVM: more than `MAX_ALLOWED_CALL_PINS` pins summed across the allow-list.
+    ///      Distinct from `TooManyPins`, which bounds ONE entry: a rules set can satisfy that for every
+    ///      entry and still ask for 256 pins in total.
+    error TooManyAllowedCallPins(uint256 total);
 
     // check
     error TargetMismatch(address actual, address expected);
@@ -307,6 +312,13 @@ library UniversalRulesPolicyErrors {
     error TotalValueExceeded(uint256 newSpent, uint256 cap);
     error CalldataTooShortForPin(uint256 actualLength, uint256 index, uint256 needed);
     error ArgPinMismatch(bytes32 actual, uint256 index, bytes32 expected);
+    /// @dev A `PinOp.MAX` pin failed: the argument word, read as `uint256`, exceeds the pinned ceiling.
+    ///      THE OFFENDING VALUE COMES FIRST, as every native error does, because the engine truncates
+    ///      `checkAction` revert data to a selector plus 28 bytes of the first argument — an index or a
+    ///      bound in that position would surface as zeros and tell nobody anything.
+    ///      `index` is the pin's index WITHIN ITS ENTRY on the EVM side, and within `cfg.pins` on the
+    ///      native side.
+    error ArgPinAboveMax(uint256 actual, uint256 index, uint256 max);
     error CalldataTooShortForAmount(uint256 actualLength, uint256 needed);
     error NativeAmountExceedsCap(uint256 amount, uint256 cap);
     error TotalNativeAmountExceeded(uint256 newSpent, uint256 cap);

@@ -67,7 +67,8 @@ test, so run it at least once against a real endpoint before reporting a phase d
 
 - `DEPLOYMENT_RPC` + `CHAIN_ID` — gate S-05, which checks `deployments/<chainId>.json` against a live chain.
 
-Deployment (all five contracts, dependency order, writes `deployments/<chainId>.json`):
+Deployment (all five contracts plus the linked `SvmRulebook` library, dependency order, writes
+`deployments/<chainId>.json`):
 
 ```
 forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
@@ -76,6 +77,12 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
 Requires `UNIVERSAL_GATEWAY_PC`, `UNIVERSAL_EXECUTOR_MODULE`, `CHAIN_ID`, and `FACTORY_ADMIN` off local
 chains, plus `UEA_FACTORY` (the chain-identity check; `0x…eA` on Donut). See `.env.example`. The script asks the
 chain for its id and reverts on a mismatch with `CHAIN_ID`.
+
+**`SvmRulebook` is deployed and linked by forge automatically** — there is no `new SvmRulebook()` line, and
+adding one would be wrong. Its address is recorded as `svmRulebook` because verifying the URP implementation
+requires `--libraries src/policies/SvmRulebook.sol:SvmRulebook:<address>`, and that address cannot be
+recovered afterwards without disassembling URP. Verify the library itself with
+`forge verify-contract <lib> src/policies/SvmRulebook.sol:SvmRulebook`.
 
 When only `AGW` and `AGWFactory` change, `script/DeployWalletAndFactory.s.sol` deploys just the wallet implementation,
 factory logic and a new factory proxy over the existing engine, URP and validator (`SESSION_ENGINE`, `URP`,
@@ -101,7 +108,7 @@ about lives inside the payload, two decode levels down. **URP is the contract th
 |---|---|
 | `AGWFactory` (`src/`) | UUPS proxy. Deploys wallet clones at pre-computable addresses; the registry of record for "is this a real wallet, and who owns it?" There is no owner parameter: the owner is the caller, or the signer of an `OwnerIntent` (the `deployWalletWithSig(intent, sig, label)` form). |
 | `AGW` (`src/`) | Holds funds. Minimal clone with 40 bytes of immutable args (owner 0–19, factory 20–39). Push Chain has no ERC-4337 EntryPoint, so the wallet does the EntryPoint's jobs itself. |
-| `UniversalRulesPolicy` — URP (`src/policies/`) | The only novel contract and the security boundary. **Three rulebooks**, in normative order, fail closed: universal-EVM (gates 1–16), universal-SVM (S1–S18; S1–S10 restate gates 1–10, S11+ parse the Solana execute payload), and native/Push-side (nine gates). Which one runs is derived from the rules set's chain string, never from a flag anyone sets. Upgradeable behind a transparent proxy. |
+| `UniversalRulesPolicy` — URP (`src/policies/`) | The only novel contract and the security boundary. **Three rulebooks**, in normative order, fail closed: universal-EVM (gates 1–16), universal-SVM (S1–S18; S1–S10 restate gates 1–10, S11+ parse the Solana execute payload), and native/Push-side (nine gates). Which one runs is derived from the rules set's chain string, never from a flag anyone sets. Upgradeable behind a transparent proxy. **The universal-SVM rulebook lives in `SvmRulebook`, a linked external library** reached by `DELEGATECALL` — extracted to free EIP-170 headroom, with no behavioural change (see the `checkAction` invariant below). |
 | `AgentValidator` (`src/validators/`) | Stateless sender validator: the rules set's config is the agent's Push address; it confirms the sender the wallet wrote into the engine's signature field. Verifies no signature. |
 | `SmartSession` (`lib/smartsessions/`) | Adopted unmodified. Stores rules sets, runs policies, deletes on revoke. The wallet's only installed module. |
 
@@ -160,14 +167,34 @@ AGW follows the core/gateway naming standard (`docs-internal/sdk-first-changes/N
   otherwise be granted with no URP gate on that action at all.
 - **`revokeRules` / `revokeAllRules` must have nothing on them that can fail.** No guard, no probe, no extra
   external call. Blockable revocation is the one regression these functions can develop.
-- **URP's `checkAction` makes no external calls.** It runs *before* the session validator is consulted, and
+- **URP's `checkAction` makes no external call except `DELEGATECALL` into its own linked rulebook library:**
+  stateless code fixed at deploy, never a token, a wallet, the engine or any address supplied at runtime.
+  It runs *before* the session validator is consulted, and
   must remain safe on arbitrary calldata (the wallet's own agent check precedes the engine, but URP does not
-  rely on it); its safety rests on having no external calls, all effects last, and reverting on every
-  failure. Do not wrap its `abi.decode` in `try/catch` to name an
+  rely on it); its safety rests on calling nothing an attacker can choose, all effects last, and reverting on
+  every failure. Do not wrap its `abi.decode` in `try/catch` to name an
   error — that introduces the external call the argument forbids.
+  **The one permitted callee is `SvmRulebook`** (`src/policies/`), which holds the Solana rulebook and is
+  linked into URP's bytecode at deploy. It runs in the proxy's context, so `msg.sender` is still the engine,
+  events carry the proxy's address and storage writes land in the proxy's slots; `SvmRulebook.check` itself
+  makes no external call of any kind. The wording was absolute before the Solana rulebook was extracted to
+  free EIP-170 headroom; it is now exact, and the property it protects is unchanged.
 - **Gate 12 (payload must be a multicall) is not a format check.** It confines the agent to the one CEA
   branch whose entries gates 13–16 can walk; the other branches bypass the allow-list, beneficiary pin and
   value cap entirely.
+- **A destination call passes if ANY allow-list entry with its `(target, selector)` passes IN FULL** —
+  beneficiary, value cap and every argument pin. If none does, the **FIRST** matching entry's failure is
+  reported, verbatim. Any-match is what lets one token be approved to Aave *or* to Uniswap, which a single
+  entry cannot express because a pin is an equality; first-error is what stops an owner who appended a loose
+  entry from seeing a complaint about that one instead of the rule they meant. Both halves are pinned by
+  tests (`test_P06_AnyMatchingEntryPasses`, `test_P07_SecondEntryMaxValue`), and a mutation that breaks
+  either fails them. An entry with **no** pins beside a pinned one makes the pinned one pointless — the SDK
+  must refuse that shape; URP deliberately does not, because it is a misconfiguration, not an unsafe state.
+- **`ArgPin` is one type with two operations (`EQ`, `MAX`), shared by the native rulebook and the EVM
+  allow-list.** `offset` is absolute with the selector included (4 = first argument) and only static head
+  arguments are pinnable: a dynamic argument holds an offset at its head position, so pinning one pins a
+  pointer. `MAX` bounds **one call**, never a lifetime. `EQ` is full-word, which makes it strictly stricter
+  than the beneficiary check — that one compares only the low 160 bits and keeps doing so.
 - **Gate 16's per-entry cap is in destination-chain native units** and is never compared against the
   Push-side `value` (gate 8). Conflating them is a real bug this design once carried.
 - **A universal rules set lists 1..`MAX_ASSETS` tokens, and gate 5 checks the request's token on every
@@ -313,10 +340,10 @@ conveniences: the artifact-based storage-layout and selector-set assertions depe
 | Path | Contents |
 |---|---|
 | `src/` (root) | `AGW.sol`, `AGWFactory.sol` |
-| `src/policies/` | `UniversalRulesPolicy.sol` (URP) |
+| `src/policies/` | `UniversalRulesPolicy.sol` (URP), `SvmRulebook.sol` (the Solana rulebook — an EXTERNAL library, linked into URP at deploy and reached by `DELEGATECALL`) |
 | `src/validators/` | `AgentValidator.sol` |
 | `src/interfaces/` | `IUniversalRulesPolicy`, `IAgentValidator`, `IAGWFactory`, `IAGW`, `IAGWInit`, `ISmartSessionConfigReader` (the one engine view upstream omits), gateway + module interfaces |
-| `src/libraries/` | `Types.sol` (the policy's terms/config types, `RulesType`, `VmFamily`, `OwnerIntent` + EIP-712 typehashes, and the temporary gateway/core mirrors), `Errors.sol` (one error library per contract), `PushChainLib` (mode/VM derivation), `OwnerAuthLib` (owner-signature check shared by factory and wallet), `AgentConfigLib` (the one decoder of the agent config, shared by validator and wallet), `ModeLib`, `ExecutionLib` |
+| `src/libraries/` | `Types.sol` (the policy's terms/config types, `RulesType`, `VmFamily`, `PinOp`, `OwnerIntent` + EIP-712 typehashes, `MIN_OUTBOUND_BODY_LEN`, `MAX_ALLOWED_CALL_PINS`, and the temporary gateway/core mirrors), `Errors.sol` (one error library per contract), `PushChainLib` (mode/VM derivation), `OwnerAuthLib` (owner-signature check shared by factory and wallet), `AgentConfigLib` (the one decoder of the agent config, shared by validator and wallet), `RulesLib` (the asset-list guards and gate-5 lookup shared by URP and `SvmRulebook` — INTERNAL, so it is inlined into both), `ModeLib`, `ExecutionLib` |
 | `test/Base.t.sol` | Shared harness — every suite extends `BaseTest` |
 | `test/unit/`, `test/integration/`, `test/mocks/` | Suites numbered by area (`1_factory` … `27_naming`), end-to-end flows, observers |
 | `script/check-execute.sh`, `script/snapshot-execute.sh` | The `execute()` source pin and its advisory gas check |

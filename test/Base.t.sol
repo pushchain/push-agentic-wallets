@@ -24,6 +24,7 @@ import { AGW } from "../src/AGW.sol";
 import { AGWFactory } from "../src/AGWFactory.sol";
 
 import {
+    ArgPin,
     AssetCap,
     AssetCapState,
     Config,
@@ -34,6 +35,7 @@ import {
     NativeTerms,
     OWNER_LANE_FLAG,
     OwnerIntent,
+    PinOp,
     RulesType,
     SvmTerms,
     UniversalOutboundTxRequest,
@@ -480,6 +482,25 @@ abstract contract BaseTest is Test {
     {
         list = new AssetCap[](1);
         list[0] = AssetCap({ token: token, maxPerCall: maxPerCall, maxTotal: maxTotal });
+    }
+
+    /// @dev An empty pin array, for the `AllowedCall` literals tests build. `AllowedCall` gained
+    ///      `ArgPin[] pins` with the EVM-pin feature; most tests pin nothing, and `noPins()` says so
+    ///      more legibly than `new ArgPin[](0)` at ~25 sites.
+    function noPins() internal pure returns (ArgPin[] memory) {
+        return new ArgPin[](0);
+    }
+
+    /// @dev One EQ pin — the common case: an address argument pinned to a specific account.
+    function eqPin(uint16 offset, address who) internal pure returns (ArgPin[] memory list) {
+        list = new ArgPin[](1);
+        list[0] = ArgPin({ offset: offset, op: PinOp.EQ, value: bytes32(uint256(uint160(who))) });
+    }
+
+    /// @dev One MAX pin — a ceiling on a `uint256` argument.
+    function maxPin(uint16 offset, uint256 ceiling) internal pure returns (ArgPin[] memory list) {
+        list = new ArgPin[](1);
+        list[0] = ArgPin({ offset: offset, op: PinOp.MAX, value: bytes32(ceiling) });
     }
 
     /// @dev The one-entry expected-spent array the universal `assertSpent` takes for a one-asset rules set.

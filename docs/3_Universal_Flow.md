@@ -216,7 +216,7 @@ Layer 1  the execution payload  one single call: target = the gateway, value = P
 
 - **Any single gate failing reverts the whole transaction** — counters, everything. A failed action costs the agent gas and changes nothing else. The agent's runtime is never trusted; URP is the trust boundary.
 - **Replay** is the sender's own nonce — the EOA's, or the UEA payload's. The wallet keeps no agent replay state: the same call sent twice is two actions, each checked and metered.
-- **Ordering note that looks wrong and is not:** the engine consults the session validator **after** the policies. The wallet has already checked the caller, but every policy, forever, must still be safe against arbitrary calldata the engine has not yet authenticated. URP is safe by construction: no external calls, effects last, revert on every failure.
+- **Ordering note that looks wrong and is not:** the engine consults the session validator **after** the policies. The wallet has already checked the caller, but every policy, forever, must still be safe against arbitrary calldata the engine has not yet authenticated. URP is safe by construction: it calls nothing an attacker can choose (its one callee is its own linked rulebook library, fixed at deploy), effects last, revert on every failure.
 
 ### 💰 FUND MOVEMENT #3 — 100 pUSDC burns on Push Chain
 

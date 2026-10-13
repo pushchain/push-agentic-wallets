@@ -178,10 +178,36 @@ struct AllowedCall {
     uint16  beneficiaryOffset; // byte offset of the beneficiary argument: 4 + 32 * argIndex
     bool    hasBeneficiary;    // if true, that argument must equal expectedCEA
     uint256 maxValue;          // native value per call, in DESTINATION-chain units; 0 = non-payable
+    ArgPin[] pins;             // 0..8 argument words this call must satisfy; 32 across the whole rule
 }
+struct ArgPin { uint16 offset; PinOp op; bytes32 value; }  // offset from byte 0, selector included: 4 = first argument
+enum PinOp { EQ, MAX }   // EQ: the word equals `value`. MAX: the word, as uint256, is <= uint256(value)
 ```
 
-ABI tuple: `(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])`
+ABI tuple: `(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256,(uint16,uint8,bytes32)[])[])`
+
+**Pins are how you bound an argument the beneficiary field cannot describe.** `approve(address,uint256)` has no
+beneficiary — demanding "spender == expectedCEA" would make it useless — so without a pin an allow-listed `approve`
+permits `approve(anyone, type(uint256).max)`, after which that party drains the destination account directly, where
+no gate can reach it. Pin the spender and cap the amount:
+
+```ts
+// USDC.approve(spender, amount) — spender fixed to Aave, allowance capped at 1000 USDC
+pins: [
+  { offset: 4,  op: 0 /* EQ  */, value: pad(AAVE_POOL) },      // argument 1
+  { offset: 36, op: 1 /* MAX */, value: toHex(1_000_000000n) } // argument 2, inclusive ceiling
+]
+```
+
+- **Only static arguments are pinnable.** `bytes`, `string` and arrays hold an offset at their head position, so a pin
+  there pins a pointer. Derive offsets from the ABI; never hand-type them.
+- **`EQ` is full-word.** An address must be left-padded clean, as the ABI encodes it. (The beneficiary check compares
+  only the low 160 bits, so an `EQ` pin is strictly stricter.)
+- **`MAX` bounds one call, not a lifetime.** Ten calls at the ceiling are ten times the ceiling.
+- **Several entries may share one `(target, selector)`** and the call passes if **any** entry passes in full — that is
+  how one token is approved to Aave *or* to Uniswap. An entry with **no** pins beside a pinned one makes the pinned one
+  pointless; **the SDK must refuse that shape**, because URP does not. When no entry passes, the **first** matching
+  entry's error is what reverts.
 
 Rules the contracts enforce at grant (each with a named error, §10):
 
@@ -190,6 +216,8 @@ Rules the contracts enforce at grant (each with a named error, §10):
 - **Every token's chain must equal the rule's chain**: URP calls `token.SOURCE_CHAIN_NAMESPACE()` and compares
   (`ChainMismatch`, `InvalidAsset`). It checks the chain, **not which token**, so picking the right PRC20 is the SDK's job.
 - `expectedCEA` non-zero; `allowedCalls` 1..32; `validUntil` non-zero and in the future.
+- **Pins: at most 8 per allowed call (`TooManyPins`), and at most 32 across the whole rule
+  (`TooManyAllowedCallPins`).** An `op` ordinal other than 0 or 1 is refused by the ABI decoder, with no named error.
 
 What the SDK has to resolve:
 
@@ -250,13 +278,17 @@ struct NativeTerms {
     uint256    maxValueTotal;    // lifetime PC; type(uint256).max = unlimited
     AmountRule amount;           // optional metering of one uint256 argument
     uint32     maxCalls;         // 0 = unlimited
-    ArgPin[]   pins;             // 0..8 arguments that must equal a fixed word
+    ArgPin[]   pins;             // 0..8 argument words: EQ (equals) or MAX (ceiling)
 }
 struct AmountRule { bool enabled; uint16 offset; uint256 maxPerCall; uint256 maxTotal; }
-struct ArgPin     { uint16 offset; bytes32 expected; }   // offset counts from byte 0, selector included: 4 = first argument
+struct ArgPin     { uint16 offset; PinOp op; bytes32 value; }  // offset from byte 0, selector included: 4 = first argument
+enum   PinOp      { EQ, MAX }                                  // same meaning as on the EVM side (§4.3)
 ```
 
-ABI tuple: `(uint48,address,bytes4,uint256,uint256,(bool,uint16,uint256,uint256),uint32,(uint16,bytes32)[])`
+ABI tuple: `(uint48,address,bytes4,uint256,uint256,(bool,uint16,uint256,uint256),uint32,(uint16,uint8,bytes32)[])`
+
+`ArgPin` is the SAME type the EVM allow-list uses, with the same two operations — one encoder serves both. The field
+was named `expected` before `MAX` existed; it is now `value`, because under `MAX` it is a ceiling.
 
 - `target`/`selector` must match the action they sit in. The contracts do not cross-check at grant, and a mismatch
   makes the rule unusable.
@@ -282,11 +314,21 @@ for byte-identical rules granted twice.
 import { encodeAbiParameters, parseAbiParameters, parseEther, maxUint256, zeroHash } from 'viem';
 
 const terms = encodeAbiParameters(
-  parseAbiParameters('(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])'),
+  parseAbiParameters(
+    '(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256,(uint16,uint8,bytes32)[])[])',
+  ),
   [[validUntil, expectedCEA,
     [[USDC_ETH, 100_000000n, 1000_000000n], [USDT_ETH, 50_000000n, maxUint256]],
     parseEther('1'),
-    [[aavePool, '0x617ba037', 68, true, 0n], [usdcSepolia, '0x095ea7b3', 0, false, 0n]]]],
+    [
+      // Aave supply(): beneficiary pinned by the beneficiary field, asset pinned by an EQ pin
+      [aavePool, '0x617ba037', 68, true, 0n, [[4, 0, pad(usdcSepolia)]]],
+      // USDC approve(): no beneficiary argument exists, so BOTH bounds are pins
+      [usdcSepolia, '0x095ea7b3', 0, false, 0n, [
+        [4,  0, pad(aavePool)],              // EQ  — the spender
+        [36, 1, toHex(1_000_000000n, { size: 32 })], // MAX — the allowance ceiling
+      ]],
+    ]]],
 );
 const initData = encodeAbiParameters(parseAbiParameters('uint16, string, bytes'), [1, 'eip155:11155111', terms]);
 
@@ -485,7 +527,7 @@ in full (they come through the wallet).
 | **Label** | `LabelTooLong(length)`, `CallerIsNotOwner` |
 | **Grant: session shape** (wallet) | `MalformedSessionShape`, `TooManyActions(n)`, `DuplicateAction(target, selector)`, `ForbiddenActionTarget(target)`, `ForbiddenActionSelector(selector)`, `RulesTypeMismatch(mode, actionIndex, target)`, `EmptyChain`, `InconsistentChain(actionIndex)`, `CallerIsNotOwner` |
 | **Grant: envelope** (URP) | `UnsupportedEnvelopeVersion(firstWord)`, `EmptyChain`, `UnsupportedNamespace(chainHash)` (chain is neither `eip155:` nor `solana:`; declared in `PushChainLib`) |
-| **Grant: cross-chain terms** (URP) | `AssetListOutOfRange(length)`, `DuplicateAsset(token)`, `InvalidAsset(token)`, `ChainMismatch(declared, assetChain)`, `InvalidConfigField`, `AllowListOutOfRange(length)`, `InvalidExpiry(validUntil)` |
+| **Grant: cross-chain terms** (URP) | `AssetListOutOfRange(length)`, `DuplicateAsset(token)`, `InvalidAsset(token)`, `ChainMismatch(declared, assetChain)`, `InvalidConfigField`, `AllowListOutOfRange(length)`, `InvalidExpiry(validUntil)`, `TooManyPins(count)` (one allowed call over 8), `TooManyAllowedCallPins(total)` (over 32 across the rule) |
 | **Grant: Solana terms** (URP) | `InvalidSvmConfigField`, `ProgramListOutOfRange`, `TooManySvmPins`, `TooManySvmDataPins`, `TooManyCeaAccounts`, `DiscriminatorLenOutOfRange`, `AmbiguousRule`, `ForbiddenProgramInAllowList`, `SvmPinRuleOutOfRange`, `SvmPinIndexOutOfRange`, `SvmMaxAccountsOutOfRange`, `DuplicateSvmPin`, `InvalidCeaAccount`, `CeaAccountsMissExpectedCEA`, `SvmDataPinInvalid`, `RuleWithoutPin` |
 | **Grant: native terms** (URP) | `NativeTargetZero`, `NativeTargetIsGateway`, `TooManyPins`, `ValueOnlyWithPins`, `ValueOnlyWithAmountRule`, `InvalidExpiry` |
 | **Revoke** | `UnknownPermission(rulesId)`, `CallerIsNotOwner` |

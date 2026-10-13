@@ -199,6 +199,16 @@ uint256 constant MAX_PINS = 8;
 uint256 constant MAX_ASSETS = 8;
 
 /**
+ * @dev Maximum pins across ALL allowed calls of one universal (EVM) rules set — the aggregate, not the
+ *      per-entry limit, which is `MAX_PINS`. Bounds grant gas and the worst-case allow-list scan:
+ *      without it, 32 entries × 8 pins would be 256 pins in one grant.
+ *
+ *      FILE-LEVEL FOR THE SAME REASON AS `MAX_PINS` and `MAX_ASSETS`: it bounds an array THE SDK
+ *      BUILDS, so an encoder has to be able to see it.
+ */
+uint256 constant MAX_ALLOWED_CALL_PINS = 32;
+
+/**
  * @dev Longest wallet label, in BYTES (not characters). `AGW.setLabel` and the deploy path refuse a
  *      longer one, so every `label()` read is bounded. FILE-LEVEL so the SDK can see it.
  */
@@ -212,6 +222,19 @@ uint256 constant MAX_LABEL_BYTES = 64;
  *      FILE-LEVEL so the SDK, which writes the envelope, can read it.
  */
 uint16 constant ENVELOPE_VERSION = 1;
+
+/**
+ * @dev Smallest valid ABI encoding of a UniversalOutboundTxRequest argument list:
+ *      32 (outer offset) + 256 (eight head words) + 32 + 32 (length words for the two empty
+ *      bytes fields). Do not hand-maintain: a test pins this against abi.encode of an empty
+ *      request, so a new struct field fails the build rather than loosening gate 4c.
+ *
+ *      FILE-LEVEL since the URP size shrink: gate 4c lives in the EVM rulebook and S4c in the
+ *      Solana one, which is now a separate linked library, so a single owner outside both is the
+ *      only way the two cannot drift. `test/Base.t.sol` mirrors the value and
+ *      `test_U21_MinBodyLen_IsPinnedToTheStruct` pins it against the real struct.
+ */
+uint256 constant MIN_OUTBOUND_BODY_LEN = 352;
 
 /**
  * @notice WIRE TYPE — one token a UNIVERSAL rules set may move, with its own caps.
@@ -249,12 +272,22 @@ struct AssetCapState {
 /// @param beneficiaryOffset byte offset of the beneficiary word in the inner calldata
 /// @param hasBeneficiary    false for calls with no beneficiary argument
 /// @param maxValue          per-entry native ceiling, DESTINATION-chain units (0 = non-payable)
+/// @param pins              0..MAX_PINS pinned argument words, checked AFTER the beneficiary and the
+///                          value. APPENDED LAST, so every member above keeps its position.
+///
+///                          SEVERAL ENTRIES MAY SHARE ONE `(target, selector)`, and a destination
+///                          call passes if ANY of them passes in full. That is what lets one token be
+///                          approved to Aave *or* to Uniswap: two entries, one pinned spender each.
+///                          An unpinned entry beside a pinned one therefore makes the pinned one
+///                          pointless — the SDK must refuse that shape; URP deliberately does not,
+///                          because it is a misconfiguration, not an unsafe state.
 struct AllowedCall {
     address target;
     bytes4 selector;
     uint16 beneficiaryOffset;
     bool hasBeneficiary;
     uint256 maxValue;
+    ArgPin[] pins;
 }
 
 /**
@@ -321,17 +354,41 @@ struct ModeSlot {
 }
 
 /**
- * @dev One pinned argument of a native call.
- * @param offset    ABSOLUTE byte offset from byte 0 of the calldata, SELECTOR INCLUDED — so 4 is
- *                  the first argument word, 36 the second, and so on.
- * @param expected  The full 32-byte word that must appear there. An address argument is
- *                  left-padded by the ABI, so a non-zero high half is a MISMATCH, deliberately:
- *                  full-word equality also proves the padding is clean, which masking would
- *                  silently accept.
+ * @dev How an `ArgPin` compares the word it reads. ORDINALS ARE WIRE FORMAT: append only, never
+ *      reorder. An out-of-range ordinal is refused by the ABI decoder before URP sees it, which is
+ *      why there is no `InvalidPinOp` error — the decode reverts unnamed, and that is documented.
+ */
+enum PinOp {
+    /// @dev The 32-byte word at `offset` must EQUAL `value`, full-word.
+    EQ,
+    /// @dev The word at `offset`, read as `uint256`, must NOT EXCEED `uint256(value)`.
+    MAX
+}
+
+/**
+ * @dev One pinned argument word. SHARED by native calls (`NativeConfig.pins`) and EVM destination
+ *      calls (`AllowedCall.pins`) — the same three fields mean the same thing in both, so the SDK
+ *      has one encoder and URP has one comparison.
+ *
+ * @param offset  ABSOLUTE byte offset from byte 0 of the calldata, SELECTOR INCLUDED — so 4 is
+ *                the first argument word, 36 the second, and so on. ONLY STATIC (HEAD) ARGUMENTS
+ *                ARE PINNABLE: a dynamic argument (`bytes`, `string`, any array) holds an offset at
+ *                its head position, not its contents, so pinning one pins a pointer. Tooling must
+ *                derive offsets from the ABI and refuse a dynamic argument; URP cannot tell the
+ *                difference and a wrong offset fails closed rather than widening anything.
+ * @param op      `EQ` for equality, `MAX` for a ceiling. See `PinOp`.
+ * @param value   Under `EQ`, the full 32-byte word that must appear. An address argument is
+ *                left-padded by the ABI, so a non-zero high half is a MISMATCH, deliberately:
+ *                full-word equality also proves the padding is clean, which masking would silently
+ *                accept. Under `MAX`, the inclusive upper bound, right-aligned as a `uint256`.
+ *
+ *                RENAMED from `expected` (was EQ-only). Under `MAX` it is a ceiling, not an
+ *                expectation, and the SDK's own documentation already called it `value`.
  */
 struct ArgPin {
     uint16 offset;
-    bytes32 expected;
+    PinOp op;
+    bytes32 value;
 }
 
 /**

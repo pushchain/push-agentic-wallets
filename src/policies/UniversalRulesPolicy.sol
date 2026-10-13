@@ -10,52 +10,32 @@ import { IERC165 } from "forge-std/interfaces/IERC165.sol";
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 import { IUniversalRulesPolicy } from "../interfaces/IUniversalRulesPolicy.sol";
-import { IPRC20Source } from "../interfaces/IPRC20Source.sol";
 import { PushChainLib } from "../libraries/PushChainLib.sol";
+import { RulesLib } from "../libraries/RulesLib.sol";
+import { SvmRulebook } from "./SvmRulebook.sol";
 import {
     AllowedCall,
-    AllowedProgram,
     ArgPin,
-    AssetCap,
     AssetCapState,
     Config,
-    MAX_ASSETS,
     ENVELOPE_VERSION,
+    MAX_ALLOWED_CALL_PINS,
     MAX_PINS,
+    MIN_OUTBOUND_BODY_LEN,
     ModeSlot,
     Multicall,
     MULTICALL_SELECTOR,
     NativeConfig,
     NativeTerms,
+    PinOp,
     RulesType,
     SEND_OUTBOUND_SELECTOR as GATEWAY_SEND_OUTBOUND_SELECTOR,
-    SvmAccountPin,
     SvmConfig,
-    SvmDataPin,
-    SvmDataPinMode,
-    SvmTerms,
     UniversalOutboundTxRequest,
     UniversalTerms,
     VALUE_SELECTOR,
     VmFamily
 } from "../libraries/Types.sol";
-
-// Cluster-independent Solana program ids, never targets. Decoded from their base58 ids by tooling and
-// pinned by `test_svm_forbiddenProgramConstantsMatchBase58` — do not hand-edit a hex word. FILE-LEVEL,
-// not inside the contract, so that test can import them without inheriting all of URP: a harness that
-// did so grew past the 24,576-byte limit and failed `make sizes`. Inlined either way; no runtime cost.
-/// @dev `11111111111111111111111111111111` — a system transfer with the CEA as funder drains it.
-bytes32 constant SYSTEM_PROGRAM = bytes32(0);
-/// @dev `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` — transfer/approve/close with CEA authority.
-bytes32 constant SPL_TOKEN_PROGRAM = 0x06ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a9;
-/// @dev `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` — the same surface on Token-2022.
-bytes32 constant TOKEN_2022_PROGRAM = 0x06ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfc;
-/// @dev `Stake11111111111111111111111111111111111111` — withdraw with the CEA as authority.
-bytes32 constant STAKE_PROGRAM = 0x06a1d8179137542a983437bdfe2a7ab2557f535c8a78722b68a49dc000000000;
-/// @dev `BPFLoaderUpgradeab1e11111111111111111111111` — never a CEA action; refused outright.
-bytes32 constant BPF_LOADER_UPGRADEABLE = 0x02a8f6914e88a1b0e210153ef763ae2b00c2b93d16c124d2c0537a1004800000;
-/// @dev `AddressLookupTab1e1111111111111111111111111` — rent drain with the CEA as payer.
-bytes32 constant ADDRESS_LOOKUP_TABLE = 0x0277a6af97339b7ac88d1892c90446f50002309266f62e53c118244982000000;
 
 /**
  * @title  UniversalRulesPolicy (URP)
@@ -71,7 +51,10 @@ bytes32 constant ADDRESS_LOOKUP_TABLE = 0x0277a6af97339b7ac88d1892c90446f5000230
  *           request under it.
  *         - No owner, no setters, no pause. Its three trust anchors are written once, at
  *           initialisation, and there is no function that can change them afterwards.
- *         - It never makes an external call, and writes only after every gate has passed.
+ *         - At validation it calls nothing anyone can choose — its only callee is `SvmRulebook`, the
+ *           linked library holding the Solana rulebook, which is stateless code fixed at deploy —
+ *           and it writes only after every gate has passed. The grant path additionally staticcalls
+ *           each listed asset's `SOURCE_CHAIN_NAMESPACE()`; see THE TEETH in `_initUniversal`.
  *
  *         UPGRADEABLE, BEHIND A TRANSPARENT PROXY, AND THAT IS A DELIBERATE TRADE. This contract
  *         used to hold its trust anchors in immutables and describe itself as needing no trust at
@@ -105,36 +88,10 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
     ///         disagree.
     bytes4 public constant SEND_OUTBOUND_SELECTOR = GATEWAY_SEND_OUTBOUND_SELECTOR;
 
-    /// @dev Smallest valid ABI encoding of a UniversalOutboundTxRequest argument list:
-    ///      32 (outer offset) + 256 (eight head words) + 32 + 32 (length words for the two empty
-    ///      bytes fields). Do not hand-maintain: a test pins this against abi.encode of an empty
-    ///      request, so a new struct field fails the build rather than loosening gate 4c.
-    uint256 internal constant MIN_OUTBOUND_BODY_LEN = 352;
-
-    // ───────────────────────────── svm rulebook bounds ─────────────────────────────
-
-    /// @dev Maximum allow-list entries per SVM config. Mirrors MAX_ALLOWED_CALLS.
-    uint256 internal constant MAX_ALLOWED_PROGRAMS = 32;
-    /// @dev Maximum account pins per SVM config. Bounds the S17 and S18 loops.
-    uint256 internal constant MAX_SVM_PINS = 16;
-    /// @dev Maximum ix_data pins per SVM config.
-    uint256 internal constant MAX_SVM_DATA_PINS = 8;
-    /// @dev Maximum CEA-controlled accounts an owner may list. Bounds the S18 loop. 16 = the CEA, one
-    ///      token account per listed asset (MAX_ASSETS = 8) and up to 7 swap-output accounts. S18 gas
-    ///      grows with the number actually listed, never with this bound.
-    uint256 internal constant MAX_CEA_ACCOUNTS = 16;
-    /// @dev Loop bound on a request's account list. Solana's transaction size limit bites first.
-    uint256 internal constant MAX_SVM_ACCOUNTS = 64;
-    /// @dev Loop bound on a request's instruction data.
-    uint256 internal constant MAX_SVM_IX_DATA = 1024;
-
-    // The SVM payload grammar — the node's `decodePayload`, byte for byte:
-    //   [u32 BE count][count × (pubkey32 ‖ is_writable u8)][u32 BE len][ix_data][u8 id][target32]
-    uint256 internal constant SVM_HEADER_LEN = 4;
-    uint256 internal constant SVM_ACCOUNT_LEN = 33;
-    uint256 internal constant SVM_LEN_FIELD = 4;
-    uint256 internal constant SVM_TRAILER_LEN = 33;
-    uint8 internal constant SVM_INSTRUCTION_EXECUTE = 2;
+    // `MIN_OUTBOUND_BODY_LEN` moved to `Types.sol` in the URP size shrink: gate 4c reads it here and
+    // S4c reads it in the linked `SvmRulebook`, so a single file-level owner outside both is the only
+    // way the two cannot drift. The SVM rulebook's own bounds and payload-grammar constants moved
+    // with it, into that library.
 
     // ───────────────────────────────── storage ─────────────────────────────────
     //
@@ -358,7 +315,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             if (vm == VmFamily.EVM) {
                 _initUniversal(_configs[configId][msg.sender][account], body, chainHash);
             } else {
-                _initSvm(_svm[configId][msg.sender][account], body, chainHash);
+                SvmRulebook.init(_svm[configId][msg.sender][account], body, chainHash);
             }
         } else {
             _initNative(_native[configId][msg.sender][account], body);
@@ -396,6 +353,30 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         }
         if (incoming.expectedCEA == address(0)) revert UniversalRulesPolicyErrors.InvalidConfigField();
 
+        // ─── THE PIN COUNTS ───
+        //
+        // BOTH bounds, and they are not the same bound. `MAX_PINS` caps ONE entry; a rules set can
+        // satisfy that for all 32 entries and still ask for 256 pins, which is why the aggregate
+        // exists. Placed HERE — after every cheap structural guard, before the asset staticcalls and
+        // before any write — so a malformed allow-list is refused without ever calling out.
+        //
+        // NOTHING ELSE IS REFUSED (decision P-11). Duplicate entries, duplicate pins and pins at
+        // offsets 0-3 (inside the selector) are owner misconfigurations: each either fails closed on
+        // every request or is redundant, and none of them widens a rules set. Refusing them would cost
+        // URP bytes to defend against a mistake the SDK is better placed to catch.
+        uint256 totalPins;
+        for (uint256 i; i < listLength;) {
+            uint256 n = incoming.allowedCalls[i].pins.length;
+            if (n > MAX_PINS) revert UniversalRulesPolicyErrors.TooManyPins(n);
+            totalPins += n;
+            unchecked {
+                ++i;
+            }
+        }
+        if (totalPins > MAX_ALLOWED_CALL_PINS) {
+            revert UniversalRulesPolicyErrors.TooManyAllowedCallPins(totalPins);
+        }
+
         // ─── THE TEETH ───
         //
         // After every decode and guard, before every write. Effects last, as everywhere else here.
@@ -425,50 +406,10 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         //    expected; the call to a codeless address then SUCCEEDS with empty returndata and the
         //    failure happens when THIS frame tries to ABI-decode it — outside the try/catch. Without
         //    this line a typo'd asset address, the likeliest real mistake, reverts unnamed.
-        _requireAssets(incoming.assets, chainHash);
+        RulesLib.requireAssets(incoming.assets, chainHash);
 
         _store(cfg, incoming);
         cfg.initialized = true;
-    }
-
-    /**
-     * @dev The asset-list guards, shared by both universal families: 1..MAX_ASSETS entries, no token
-     *      twice, and THE TEETH for every entry. A zero token fails the teeth as `InvalidAsset(0)`.
-     *      O(n^2) duplicate check at n <= 8.
-     */
-    function _requireAssets(AssetCap[] memory assets, bytes32 chainHash) internal view {
-        uint256 n = assets.length;
-        if (n == 0 || n > MAX_ASSETS) revert UniversalRulesPolicyErrors.AssetListOutOfRange(n);
-        for (uint256 i; i < n;) {
-            address token = assets[i].token;
-            for (uint256 j; j < i;) {
-                if (assets[j].token == token) revert UniversalRulesPolicyErrors.DuplicateAsset(token);
-                unchecked {
-                    ++j;
-                }
-            }
-            _requireAssetOnChain(token, chainHash);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /**
-     * @dev THE TEETH, shared by both universal families. Reverts `InvalidAsset` for a codeless
-     *      address, a reverting callee or a non-string answer, and `ChainMismatch` when the asset's
-     *      own `SOURCE_CHAIN_NAMESPACE()` hash differs from the declared chain. See the long note
-     *      in `_initUniversal` for why this external call is safe at init and nowhere else.
-     */
-    function _requireAssetOnChain(address asset, bytes32 chainHash) internal view {
-        if (asset.code.length == 0) revert UniversalRulesPolicyErrors.InvalidAsset(asset);
-
-        try IPRC20Source(asset).SOURCE_CHAIN_NAMESPACE() returns (string memory ns) {
-            bytes32 assetChain = keccak256(bytes(ns));
-            if (assetChain != chainHash) revert UniversalRulesPolicyErrors.ChainMismatch(chainHash, assetChain);
-        } catch {
-            revert UniversalRulesPolicyErrors.InvalidAsset(asset);
-        }
     }
 
     /**
@@ -516,242 +457,18 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
     }
 
     /**
-     * @dev The SVM init guards — the `solana:*` counterpart of `_initUniversal`.
-     *      - Shape bounds first, then expiry and the three identity fields, then the allow-list
-     *        rules, then the pins, then the teeth. Same discipline as the universal branch: every
-     *        decode and guard before any write.
-     *      - The teeth are IDENTICAL to the universal branch and for the same reason: each listed
-     *        asset's `SOURCE_CHAIN_NAMESPACE()` is what the gateway routes on, so binding the declared
-     *        chain to every one of them here is what makes a `solana:` grant with an EVM asset impossible.
-     * @param cfg        Storage slot to write.
-     * @param body       `abi.encode(SvmTerms)`.
-     * @param chainHash  keccak256 of the declared chain string, verified against every listed asset.
-     */
-    function _initSvm(SvmConfig storage cfg, bytes memory body, bytes32 chainHash) internal {
-        SvmTerms memory incoming = abi.decode(body, (SvmTerms));
-
-        uint256 ruleCount = incoming.programs.length;
-        if (ruleCount == 0 || ruleCount > MAX_ALLOWED_PROGRAMS) {
-            revert UniversalRulesPolicyErrors.ProgramListOutOfRange(ruleCount);
-        }
-        if (incoming.pins.length > MAX_SVM_PINS) {
-            revert UniversalRulesPolicyErrors.TooManySvmPins(incoming.pins.length);
-        }
-        if (incoming.dataPins.length > MAX_SVM_DATA_PINS) {
-            revert UniversalRulesPolicyErrors.TooManySvmDataPins(incoming.dataPins.length);
-        }
-        if (incoming.ceaAccounts.length > MAX_CEA_ACCOUNTS) {
-            revert UniversalRulesPolicyErrors.TooManyCeaAccounts(incoming.ceaAccounts.length);
-        }
-
-        if (incoming.validUntil == 0 || incoming.validUntil <= block.timestamp) {
-            revert UniversalRulesPolicyErrors.InvalidExpiry(incoming.validUntil);
-        }
-        if (incoming.expectedCEA == bytes32(0) || incoming.gatewayProgram == bytes32(0)) {
-            revert UniversalRulesPolicyErrors.InvalidSvmConfigField();
-        }
-
-        _checkSvmRules(incoming);
-        _checkSvmPinShapes(incoming);
-        _checkCeaAccountList(incoming);
-
-        _requireAssets(incoming.assets, chainHash);
-
-        _storeSvm(cfg, incoming);
-        cfg.initialized = true;
-    }
-
-    /**
-     * @dev Allow-list rule guards: tag shape, forbidden programs, and pairwise exactness.
-     *      - A rule is `dataless` XOR has a 1..8-byte tag.
-     *      - A fixed account count, if set, is within the S13 bound.
-     *      - A program the check path forbids as a target is refused here too; S15 is then defence
-     *        in depth against state this guard makes unreachable.
-     *      - Two rules on one program must not both match one request, or first-match makes the
-     *        later rule dead and its pins never run. O(n^2) at n <= 32.
-     */
-    function _checkSvmRules(SvmTerms memory t) internal pure {
-        uint256 n = t.programs.length;
-        for (uint256 i; i < n;) {
-            AllowedProgram memory r = t.programs[i];
-            bool badLen = r.dataless ? r.discriminatorLen != 0 : (r.discriminatorLen == 0 || r.discriminatorLen > 8);
-            if (badLen) revert UniversalRulesPolicyErrors.DiscriminatorLenOutOfRange(i, r.discriminatorLen);
-            // A fixed count above the S13 loop bound can never be met: every request would fail
-            // S13 or S16. Refused here so the owner never grants a rule that is dead on arrival.
-            if (r.maxAccounts > MAX_SVM_ACCOUNTS) {
-                revert UniversalRulesPolicyErrors.SvmMaxAccountsOutOfRange(i, r.maxAccounts);
-            }
-            if (_isForbiddenProgram(r.program, t.gatewayProgram, t.expectedCEA)) {
-                revert UniversalRulesPolicyErrors.ForbiddenProgramInAllowList(i, r.program);
-            }
-            for (uint256 j; j < i;) {
-                if (_rulesCollide(t.programs[j], r)) revert UniversalRulesPolicyErrors.AmbiguousRule(j, i);
-                unchecked {
-                    ++j;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @dev Two rules collide when a single request could match both: same program and either both
-    ///      dataless, or neither dataless with one tag a prefix of the other. A dataless rule and a
-    ///      tagged rule never collide — one needs empty ix_data, the other needs at least the tag.
-    function _rulesCollide(AllowedProgram memory a, AllowedProgram memory b) internal pure returns (bool) {
-        if (a.program != b.program) return false;
-        if (a.dataless || b.dataless) return a.dataless && b.dataless;
-        uint256 shorter = a.discriminatorLen < b.discriminatorLen ? a.discriminatorLen : b.discriminatorLen;
-        bytes8 mask = _prefixMask8(shorter);
-        return (a.discriminator & mask) == (b.discriminator & mask);
-    }
-
-    /**
-     * @dev Pin shape guards, both kinds.
-     *      - Account pins: rule in range; index below the loop bound and, when the rule fixes its
-     *        account count, below that too. Every rule must own at least one — HYGIENE: an
-     *        authority-only pin always passes, and which positions must be pinned is the compiler's
-     *        responsibility, not this contract's.
-     *        One pin per (rule, index).
-     *      - Data pins: rule in range and not dataless; `len` 1..32 for EQ, 1..8 otherwise; from-end
-     *        offsets must reach at least `len` back; every offset stays inside the ix_data bound;
-     *        the comparison value must be one the field can actually be compared against
-     *        (`_dataPinValueValid`).
-     */
-    function _checkSvmPinShapes(SvmTerms memory t) internal pure {
-        uint256 ruleCount = t.programs.length;
-        bool[] memory covered = new bool[](ruleCount); // rule i has at least one account pin
-
-        uint256 n = t.pins.length;
-        for (uint256 i; i < n;) {
-            SvmAccountPin memory pin = t.pins[i];
-            if (pin.ruleIndex >= ruleCount) revert UniversalRulesPolicyErrors.SvmPinRuleOutOfRange(i, pin.ruleIndex);
-            uint8 cap = t.programs[pin.ruleIndex].maxAccounts;
-            if (pin.accountIndex >= MAX_SVM_ACCOUNTS || (cap != 0 && pin.accountIndex >= cap)) {
-                revert UniversalRulesPolicyErrors.SvmPinIndexOutOfRange(i, pin.accountIndex);
-            }
-            // One position, one pin. Two pins on a (rule, index) are either redundant or
-            // contradictory, and a contradictory pair makes the rule unsatisfiable. O(n^2), n <= 16.
-            for (uint256 j; j < i;) {
-                if (t.pins[j].ruleIndex == pin.ruleIndex && t.pins[j].accountIndex == pin.accountIndex) {
-                    revert UniversalRulesPolicyErrors.DuplicateSvmPin(j, i);
-                }
-                unchecked {
-                    ++j;
-                }
-            }
-            covered[pin.ruleIndex] = true;
-            unchecked {
-                ++i;
-            }
-        }
-        for (uint256 r; r < ruleCount;) {
-            if (!covered[r]) revert UniversalRulesPolicyErrors.RuleWithoutPin(r);
-            unchecked {
-                ++r;
-            }
-        }
-
-        n = t.dataPins.length;
-        for (uint256 i; i < n;) {
-            SvmDataPin memory dp = t.dataPins[i];
-            if (dp.ruleIndex >= ruleCount || t.programs[dp.ruleIndex].dataless) {
-                revert UniversalRulesPolicyErrors.SvmDataPinInvalid(i);
-            }
-            uint256 maxLen = dp.mode == SvmDataPinMode.EQ ? 32 : 8;
-            if (dp.len == 0 || dp.len > maxLen) revert UniversalRulesPolicyErrors.SvmDataPinInvalid(i);
-            if (!_offsetValid(dp.fromEnd, dp.offset, dp.len)) revert UniversalRulesPolicyErrors.SvmDataPinInvalid(i);
-            if (!_dataPinValueValid(dp)) revert UniversalRulesPolicyErrors.SvmDataPinInvalid(i);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @dev A from-start field must end inside the bound; a from-end field must start at least `len`
-    ///      back and no further back than the bound.
-    function _offsetValid(bool fromEnd, uint16 offset, uint8 len) internal pure returns (bool) {
-        if (fromEnd) return uint256(offset) >= len && uint256(offset) <= MAX_SVM_IX_DATA;
-        return uint256(offset) + len <= MAX_SVM_IX_DATA;
-    }
-
-    /**
-     * @dev Refuses a data pin whose comparison is vacuous or impossible, and the encoding mistake that
-     *      would make it so. The two value encodings differ by mode — EQ compares LEFT-ALIGNED raw
-     *      bytes, the integer modes compare a RIGHT-ALIGNED integer — and each mis-encoding of one
-     *      as the other is caught here, at grant, instead of producing a pin that silently never
-     *      fails (a ceiling above the field's range) or never passes.
-     *      - EQ: every byte of `expected` past `len` must be zero (a right-aligned integer would
-     *        leave its value there).
-     *      - GTE / LTE: `expected` must fit in `len` bytes, i.e. `< 2^(8·len)`.
-     *      - RATIO: `num` and `den` non-zero (`num == 0` makes `a·den >= 0` always true), and the
-     *        second field's offset valid.
-     */
-    function _dataPinValueValid(SvmDataPin memory dp) internal pure returns (bool) {
-        if (dp.mode == SvmDataPinMode.EQ) return dp.expected & ~_prefixMask32(dp.len) == bytes32(0);
-        if (dp.mode == SvmDataPinMode.RATIO_GTE_LE) {
-            return dp.num != 0 && dp.den != 0 && _offsetValid(dp.fromEnd, dp.offsetB, dp.len);
-        }
-        return uint256(dp.expected) >> (8 * uint256(dp.len)) == 0;
-    }
-
-    /**
-     * @dev The CEA-controlled account list that S18 enforces.
-     *      - Must contain `expectedCEA`. The CEA always holds value (it is the signer, and pSOL lands
-     *        on it), so an empty or CEA-less list would silently switch the aliasing defence off.
-     *      - No zero entry: `bytes32(0)` is the System program's id, present in most account lists,
-     *        and would make every request fail.
-     *      - No entry equal to an allow-listed program: Anchor passes the program's own account in
-     *        many instructions, and listing it would make every such request fail.
-     *      - No duplicates.
-     *      All four fail closed at check time anyway; refusing them here means an owner never grants
-     *      a rules set that can never be used.
-     */
-    function _checkCeaAccountList(SvmTerms memory t) internal pure {
-        uint256 n = t.ceaAccounts.length;
-        bool hasCea;
-        for (uint256 i; i < n;) {
-            bytes32 key = t.ceaAccounts[i];
-            if (key == bytes32(0)) revert UniversalRulesPolicyErrors.InvalidCeaAccount(i);
-            if (key == t.expectedCEA) hasCea = true;
-            for (uint256 j; j < i;) {
-                if (t.ceaAccounts[j] == key) revert UniversalRulesPolicyErrors.InvalidCeaAccount(i);
-                unchecked {
-                    ++j;
-                }
-            }
-            uint256 rules = t.programs.length;
-            for (uint256 r; r < rules;) {
-                if (t.programs[r].program == key) revert UniversalRulesPolicyErrors.InvalidCeaAccount(i);
-                unchecked {
-                    ++r;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (!hasCea) revert UniversalRulesPolicyErrors.CeaAccountsMissExpectedCEA();
-    }
-
-    /// @dev The programs an SVM rules set may never target, directly. Inner CPIs are the allow-listed
-    ///      program's own business — this set guards the top level only.
-    function _isForbiddenProgram(bytes32 program, bytes32 gatewayProgram, bytes32 cea) internal pure returns (bool) {
-        return program == SYSTEM_PROGRAM || program == SPL_TOKEN_PROGRAM || program == TOKEN_2022_PROGRAM
-            || program == STAKE_PROGRAM || program == BPF_LOADER_UPGRADEABLE || program == ADDRESS_LOOKUP_TABLE
-            || program == gatewayProgram || program == cea;
-    }
-
-    /**
      * @notice Runs every gate a cross-chain agent request must pass. Order is fixed; any failure
      *         reverts with nothing written.
      *
      * @dev    - Not `view`: gate 7 accumulates spend, and the engine invokes this with a real call
      *           so the write persists.
      *         - Runs before the session signature is verified, on unauthenticated calldata from an
-     *           arbitrary caller. It is safe because it makes no external call, applies all effects
-     *           last, and reverts on every failure. Do not introduce an external call here.
+     *           arbitrary caller. It is safe because it makes NO EXTERNAL CALL EXCEPT the
+     *           `DELEGATECALL` into its own linked rulebook library (`SvmRulebook`, on the SVM
+     *           branch only) — stateless code fixed at deploy, never a token, a wallet, the engine
+     *           or any address supplied at runtime — applies all effects last, and reverts on every
+     *           failure. DO NOT INTRODUCE ANY OTHER EXTERNAL CALL HERE. The linked-library exception
+     *           is not a precedent for calling anything whose address comes from config or calldata.
      *         - Replayed signatures cannot burn budget through this door; they die at the wallet's
      *           nonce gate first.
      *
@@ -773,9 +490,12 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
      *         13. the inner call count is between one and the maximum
      *         14. no inner call targets the wallet, this policy, the gateway or the destination
      *             account
-     *         15. each inner target and selector is allow-listed, and where the rule declares a
-     *             beneficiary it matches the expected destination account
-     *         16. each inner value is within its rule's allowance
+     *         15. each inner target and selector is allow-listed, and the entry that allows it passes
+     *             IN FULL: its beneficiary (where declared), its value cap and every one of its
+     *             argument pins. SEVERAL ENTRIES MAY SHARE ONE `(target, selector)` and the call
+     *             passes if ANY of them passes; if none does, the FIRST matching entry's failure is
+     *             what reverts
+     *         16. each inner value is within that entry's allowance (evaluated inside 15)
      *
      *         - A zero amount passes gate 6 and writes nothing: zero-amount is the redeployment
      *           path, acting on capital already at the destination. There is no zero-amount gate and
@@ -814,7 +534,11 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             if (slot.mode == RulesType.NATIVE) return _checkNative(id, account, target, value, data);
             // The family byte was never written by earlier implementations, so it reads 0 = EVM on
             // every pre-existing universal slot — those keep routing exactly where they always did.
-            if (slot.vm == VmFamily.SVM) return _checkSvm(id, account, target, value, data);
+            if (slot.vm == VmFamily.SVM) {
+                return SvmRulebook.check(
+                    _svm[id][msg.sender][account], id, account, target, UNIVERSAL_GATEWAY_PC, value, data
+                );
+            }
         }
         return _checkUniversal(id, account, target, value, data);
     }
@@ -853,7 +577,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         }
         UniversalOutboundTxRequest memory req = abi.decode(data[4:], (UniversalOutboundTxRequest));
 
-        AssetCapState storage cap = _assetFor(cfg.assets, req.token);
+        AssetCapState storage cap = RulesLib.assetFor(cfg.assets, req.token);
 
         if (req.amount > cap.maxPerCall) {
             revert UniversalRulesPolicyErrors.AmountExceedsCap(req.amount, cap.maxPerCall);
@@ -945,7 +669,9 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             revert UniversalRulesPolicyErrors.TotalValueExceeded(newValueSpent, cfg.maxValueTotal);
         }
 
-        // N7
+        // N7 — EQ and MAX. EQ is unchanged in meaning and in error; MAX is new, and bounds ONE call.
+        // It is NOT a lifetime cap: `AmountRule` (N8) remains the only lifetime metering on a native
+        // call, so a MAX pin on an amount argument limits each call and not the total.
         uint256 pinCount = cfg.pins.length;
         for (uint256 i; i < pinCount;) {
             ArgPin storage pin = cfg.pins[i];
@@ -953,7 +679,14 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             if (data.length < needed) revert UniversalRulesPolicyErrors.CalldataTooShortForPin(data.length, i, needed);
 
             bytes32 actual = bytes32(data[pin.offset:needed]);
-            if (actual != pin.expected) revert UniversalRulesPolicyErrors.ArgPinMismatch(actual, i, pin.expected);
+            // Named `pinned`, not `value`: `value` is this function's Push-native value parameter.
+            bytes32 pinned = pin.value;
+
+            if (pin.op == PinOp.EQ) {
+                if (actual != pinned) revert UniversalRulesPolicyErrors.ArgPinMismatch(actual, i, pinned);
+            } else if (uint256(actual) > uint256(pinned)) {
+                revert UniversalRulesPolicyErrors.ArgPinAboveMax(uint256(actual), i, uint256(pinned));
+            }
 
             unchecked {
                 ++i;
@@ -1043,18 +776,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             }
             if (entry.data.length < 4) revert UniversalRulesPolicyErrors.MalformedInnerCalldata();
 
-            AllowedCall memory rule = _requireAllowed(cfg, entry.to, bytes4(_slice(entry.data, 0, 4)));
-            if (rule.hasBeneficiary) {
-                address beneficiary = _extractBeneficiary(entry.data, rule.beneficiaryOffset);
-                if (beneficiary != expectedCEA) {
-                    revert UniversalRulesPolicyErrors.BeneficiaryMismatch(expectedCEA, beneficiary);
-                }
-            }
-
-            // Destination-chain native units, never the Push-side value: two assets on two chains.
-            if (entry.value > rule.maxValue) {
-                revert UniversalRulesPolicyErrors.InnerValueExceedsAllowance(i, entry.value, rule.maxValue);
-            }
+            _requireAllowed(cfg, entry, bytes4(_slice(entry.data, 0, 4)), expectedCEA, i);
 
             unchecked {
                 ++i;
@@ -1063,358 +785,166 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
     }
 
     /**
-     * @dev The SVM gauntlet — S1 to S18, then effects. Same discipline as the other two: it runs
-     *      BEFORE the session signature is verified, on unauthenticated calldata from an arbitrary
-     *      caller, so it makes no external call, applies all effects last, and reverts on every
-     *      failure.
+     * @dev Gates 15 and 16 for ONE inner call: the allow-list, the beneficiary, the value cap and the
+     *      pins. Reverts if the call is permitted by no entry; returns silently if it is.
      *
-     *      S1-S10 are the universal gates 1-10 restated against `SvmConfig` — they are chain-
-     *      independent. S6b is Solana's u64 amount. S11 onwards replace gates 11-16:
+     *      ANY-MATCH, NOT FIRST-MATCH (decision P-4). Several entries may share one
+     *      `(target, selector)`, and the call passes if ANY of them passes IN FULL. That is what lets
+     *      one token be approved to Aave *or* to Uniswap — two entries, one pinned spender each —
+     *      which a single entry cannot express, because a pin is an equality and a call has one
+     *      spender. The previous behaviour returned the FIRST `(target, selector)` match and ignored
+     *      every later entry, so a second entry was dead weight.
      *
-     *      S11  the recipient is a 32-byte, non-zero pubkey (the target program)
-     *      S12  the payload is non-empty and parses as the node's execute grammar, exactly
-     *      S13  instruction_id is 2 (execute); account count and ix_data length are within bounds
-     *      S14  the payload's target program equals the recipient
-     *      S15  the target is not a forbidden program
-     *      S16  a rule matches (program, tag) — first match — and its account count, if fixed, holds
-     *      S17  every account pin and every data pin of that rule holds
-     *      S18  every CEA-controlled account in the list sits only where that rule pins it
+     *      WHICH ERROR SURFACES WHEN NOTHING PASSES: the FIRST matching entry's failure, verbatim.
+     *      Reporting the last would mean an owner who appended a loose entry sees a complaint about
+     *      that one rather than about the rule they meant to use, and reporting a synthesised
+     *      "nothing matched" error would throw away the argument that tells them *why*.
      *
-     *      - A zero amount passes S6/S7 and writes nothing: on SVM that is a payload-only call
-     *        acting on capital already at the destination, the analogue of the EVM redeploy path.
-     *      - The forbidden-program check runs before the allow-list, as gate 14 runs before 15.
+     *      THE SINGLE-ENTRY PATH IS BYTE-IDENTICAL TO BEFORE. With one entry per
+     *      `(target, selector)` and no pins, the loop matches once, `_entryFailure` evaluates the same
+     *      beneficiary and value checks in the same order, and the same error bytes come back. The
+     *      pre-existing suite is the proof, and it passes unedited.
+     *
+     * @param cfg          Config whose allow-list is scanned.
+     * @param entry        The inner call under test.
+     * @param selector     Its selector, already sliced by the caller.
+     * @param expectedCEA  The committed destination account.
+     * @param index        The inner call's index, for `InnerValueExceedsAllowance`.
      */
-    function _checkSvm(ConfigId id, address account, address target, uint256 value, bytes calldata data)
-        internal
-        returns (uint256)
-    {
-        SvmConfig storage cfg = _svm[id][msg.sender][account];
+    function _requireAllowed(
+        Config storage cfg,
+        Multicall memory entry,
+        bytes4 selector,
+        address expectedCEA,
+        uint256 index
+    ) internal view {
+        uint256 len = cfg.allowedCalls.length;
+        bytes memory firstErr;
+        bool matched;
 
-        if (!cfg.initialized) revert UniversalRulesPolicyErrors.NotInitialized(id, account);
+        for (uint256 i; i < len;) {
+            // STORAGE REFERENCE, never a memory copy: an entry now carries a dynamic pin array, and
+            // copying one per candidate would allocate on every miss.
+            AllowedCall storage rule = cfg.allowedCalls[i];
 
-        if (block.timestamp > cfg.validUntil) revert UniversalRulesPolicyErrors.RulesExpired(cfg.validUntil);
+            if (rule.target == entry.to && rule.selector == selector) {
+                matched = true;
+                bytes memory err = _entryFailure(rule, entry, expectedCEA, index);
+                if (err.length == 0) return; // this entry permits the call, in full
+                if (firstErr.length == 0) firstErr = err;
+            }
 
-        if (target != UNIVERSAL_GATEWAY_PC) revert UniversalRulesPolicyErrors.InvalidTarget(target);
-
-        if (data.length < 4) revert UniversalRulesPolicyErrors.CalldataTooShort(data.length);
-
-        if (bytes4(data[0:4]) != SEND_OUTBOUND_SELECTOR) {
-            revert UniversalRulesPolicyErrors.InvalidSelector(bytes4(data[0:4]));
+            unchecked {
+                ++i;
+            }
         }
 
-        if (data.length < 4 + MIN_OUTBOUND_BODY_LEN) {
-            revert UniversalRulesPolicyErrors.MalformedOutboundRequest(data.length);
+        if (!matched) revert UniversalRulesPolicyErrors.CallNotAllowed(entry.to, selector);
+
+        // The first matching entry's failure, byte for byte, so the engine's
+        // `PolicyCheckReverted(bytes32)` wrapping sees exactly what a direct revert would have
+        // produced. Assembly because Solidity has no "revert with these bytes" statement.
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            revert(add(firstErr, 32), mload(firstErr))
         }
-        UniversalOutboundTxRequest memory req = abi.decode(data[4:], (UniversalOutboundTxRequest));
-
-        AssetCapState storage cap = _assetFor(cfg.assets, req.token);
-
-        if (req.amount > cap.maxPerCall) {
-            revert UniversalRulesPolicyErrors.AmountExceedsCap(req.amount, cap.maxPerCall);
-        }
-
-        if (req.amount > type(uint64).max) revert UniversalRulesPolicyErrors.AmountExceedsU64(req.amount);
-
-        uint256 newSpent = cap.spent + req.amount;
-        if (newSpent > cap.maxTotal) revert UniversalRulesPolicyErrors.TotalSpendCapExceeded(newSpent, cap.maxTotal);
-
-        if (value > cfg.maxGasPerCall) revert UniversalRulesPolicyErrors.PCValueExceedsCap(value, cfg.maxGasPerCall);
-
-        if (req.maxPCForGas == 0) revert UniversalRulesPolicyErrors.UncappedGasSwapRejected();
-
-        if (req.revertRecipient != account) {
-            revert UniversalRulesPolicyErrors.InvalidRevertRecipient(account, req.revertRecipient);
-        }
-
-        // S11 — a zero pubkey is reported with the length it has (32): the shape is right, the value
-        // is not, and both are "not a pubkey".
-        if (req.recipient.length != 32) revert UniversalRulesPolicyErrors.RecipientNotPubkey(req.recipient.length);
-        bytes32 recipient = _loadWord(req.recipient, 0);
-        if (recipient == bytes32(0)) revert UniversalRulesPolicyErrors.RecipientNotPubkey(32);
-
-        _checkSvmPayload(cfg, recipient, req.payload);
-
-        if (req.amount > 0) {
-            cap.spent = newSpent;
-            emit OutboundMetered(id, msg.sender, account, req.token, req.amount);
-        }
-
-        return VALIDATION_SUCCESS;
-    }
-
-    /// @dev The parsed shape of an execute payload. Memory only; never stored.
-    struct SvmPayloadView {
-        uint256 count;
-        uint256 ixOff;
-        uint256 ixLen;
-        bytes32 target;
     }
 
     /**
-     * @dev S12 to S18. Split out for stack depth; makes no external call, writes no storage.
-     * @param cfg        Config to validate against.
-     * @param recipient  The request's recipient, already proven to be a non-zero pubkey.
-     * @param payload    The execute payload carried by the outbound request.
+     * @dev Whether ONE allow-list entry permits ONE inner call. Returns the ABI-encoded custom error
+     *      of the first failure, or EMPTY BYTES if the entry permits the call in full.
+     *
+     *      IT RETURNS RATHER THAN REVERTS because any-match needs to try the next entry after a
+     *      failure, and a revert cannot be caught without an external call — which `checkAction` must
+     *      not have. The bytes it builds are byte-identical to what
+     *      `abi.encodeWithSelector(<error>.selector, args...)` produces.
+     *
+     *      ORDER IS FIXED (decision P-5): beneficiary, then value, then pins in array order. Pins run
+     *      LAST so the two pre-existing checks keep reporting their own errors on a call that fails
+     *      both — which is what makes the single-entry path byte-identical to the old code.
+     *
+     * @param rule         The candidate entry.
+     * @param entry        The inner call under test.
+     * @param expectedCEA  The committed destination account.
+     * @param index        The inner call's index, for `InnerValueExceedsAllowance`.
+     * @return Empty if the entry permits the call; otherwise the encoded error.
      */
-    function _checkSvmPayload(SvmConfig storage cfg, bytes32 recipient, bytes memory payload) internal view {
-        SvmPayloadView memory v = _parseSvmPayload(payload);
-
-        if (v.target != recipient) revert UniversalRulesPolicyErrors.RecipientTargetMismatch(recipient, v.target);
-
-        if (_isForbiddenProgram(v.target, cfg.gatewayProgram, cfg.expectedCEA)) {
-            revert UniversalRulesPolicyErrors.ForbiddenTargetProgram(v.target);
+    function _entryFailure(AllowedCall storage rule, Multicall memory entry, address expectedCEA, uint256 index)
+        internal
+        view
+        returns (bytes memory)
+    {
+        // 1 · the beneficiary, with today's semantics exactly: the LOW 160 BITS are compared, so an
+        //     argument with dirty high bytes still matches. An EQ pin is stricter (full word) and is
+        //     the recommended replacement, but this check's meaning is deliberately unchanged.
+        if (rule.hasBeneficiary) {
+            uint256 offset = uint256(rule.beneficiaryOffset);
+            if (offset + 32 > entry.data.length) {
+                return abi.encodeWithSelector(UniversalRulesPolicyErrors.MalformedInnerCalldata.selector);
+            }
+            address beneficiary = _extractBeneficiary(entry.data, rule.beneficiaryOffset);
+            if (beneficiary != expectedCEA) {
+                return abi.encodeWithSelector(
+                    UniversalRulesPolicyErrors.BeneficiaryMismatch.selector, expectedCEA, beneficiary
+                );
+            }
         }
 
-        uint256 rule = _matchSvmRule(cfg, payload, v);
+        // 2 · the value cap. Destination-chain native units, never the Push-side value: two assets on
+        //     two chains.
+        if (entry.value > rule.maxValue) {
+            return abi.encodeWithSelector(
+                UniversalRulesPolicyErrors.InnerValueExceedsAllowance.selector, index, entry.value, rule.maxValue
+            );
+        }
 
-        _checkSvmAccountPins(cfg, payload, v, rule);
-        _checkSvmDataPins(cfg, payload, v, rule);
-        _checkCeaAccounts(cfg, payload, v, rule);
+        // 3 · the pins, in array order.
+        uint256 pinCount = rule.pins.length;
+        for (uint256 k; k < pinCount;) {
+            ArgPin storage pin = rule.pins[k];
+            uint256 needed = uint256(pin.offset) + 32;
+            if (entry.data.length < needed) {
+                return abi.encodeWithSelector(
+                    UniversalRulesPolicyErrors.CalldataTooShortForPin.selector, entry.data.length, k, needed
+                );
+            }
+
+            bytes32 word = _loadWord(entry.data, pin.offset);
+            bytes32 pinned = pin.value;
+
+            if (pin.op == PinOp.EQ) {
+                if (word != pinned) {
+                    return abi.encodeWithSelector(UniversalRulesPolicyErrors.ArgPinMismatch.selector, word, k, pinned);
+                }
+            } else if (uint256(word) > uint256(pinned)) {
+                return abi.encodeWithSelector(
+                    UniversalRulesPolicyErrors.ArgPinAboveMax.selector, uint256(word), k, uint256(pinned)
+                );
+            }
+
+            unchecked {
+                ++k;
+            }
+        }
+
+        return "";
     }
 
     /**
-     * @dev S12/S13 — the node's `decodePayload` grammar, byte for byte, including "consumed exactly":
-     *      `[u32 BE count][count × (pubkey32 ‖ writable u8)][u32 BE len][ix_data][u8 id][target32]`.
-     *      Every length is checked before the read it guards. `is_writable` bytes are read past,
-     *      never judged — a wrong flag fails on Solana, not here.
+     * @dev Loads the 32-byte word at `offset` from a memory blob. The caller has already proved the
+     *      word is inside `b`; this helper does not re-check, exactly as the native N7 read does not.
+     *
+     *      Added for the EVM pins. `_extractBeneficiary` cannot serve both: it masks to 160 bits,
+     *      which is precisely the behaviour an EQ pin must NOT have.
      */
-    function _parseSvmPayload(bytes memory p) internal pure returns (SvmPayloadView memory v) {
-        if (p.length == 0) revert UniversalRulesPolicyErrors.SvmPayloadEmpty();
-        if (p.length < SVM_HEADER_LEN + SVM_LEN_FIELD + SVM_TRAILER_LEN) {
-            revert UniversalRulesPolicyErrors.MalformedSvmPayload(1);
+    function _loadWord(bytes memory b, uint256 offset) internal pure returns (bytes32 w) {
+        // solhint-disable-next-line no-inline-assembly
+        assembly ("memory-safe") {
+            w := mload(add(add(b, 0x20), offset))
         }
-
-        v.count = _u32be(p, 0);
-        if (v.count > MAX_SVM_ACCOUNTS) revert UniversalRulesPolicyErrors.SvmAccountsOutOfRange(v.count);
-
-        uint256 lenOff = SVM_HEADER_LEN + v.count * SVM_ACCOUNT_LEN;
-        if (p.length < lenOff + SVM_LEN_FIELD) revert UniversalRulesPolicyErrors.MalformedSvmPayload(2);
-
-        v.ixLen = _u32be(p, lenOff);
-        if (v.ixLen > MAX_SVM_IX_DATA) revert UniversalRulesPolicyErrors.SvmIxDataTooLong(v.ixLen);
-        v.ixOff = lenOff + SVM_LEN_FIELD;
-
-        uint256 expected = v.ixOff + v.ixLen + SVM_TRAILER_LEN;
-        if (p.length < expected) revert UniversalRulesPolicyErrors.MalformedSvmPayload(3);
-        if (p.length > expected) revert UniversalRulesPolicyErrors.MalformedSvmPayload(4);
-
-        uint8 id = uint8(p[v.ixOff + v.ixLen]);
-        if (id != SVM_INSTRUCTION_EXECUTE) revert UniversalRulesPolicyErrors.SvmInstructionNotExecute(id);
-
-        v.target = _loadWord(p, v.ixOff + v.ixLen + 1);
-    }
-
-    /**
-     * @dev S16 — first rule whose program equals the target and whose tag matches: a dataless rule
-     *      matches only empty ix_data; a tagged rule needs at least `discriminatorLen` bytes and a
-     *      prefix-equal tag. Init guarantees at most one rule can match, so first-match is exact.
-     *      Then the rule's fixed account count, if any.
-     */
-    function _matchSvmRule(SvmConfig storage cfg, bytes memory p, SvmPayloadView memory v)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 n = cfg.programs.length;
-        for (uint256 i; i < n;) {
-            AllowedProgram storage r = cfg.programs[i];
-            if (r.program == v.target && _tagMatches(r, p, v)) {
-                uint8 cap = r.maxAccounts;
-                if (cap != 0 && v.count != cap) {
-                    revert UniversalRulesPolicyErrors.SvmAccountCountMismatch(v.count, cap);
-                }
-                return i;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        uint256 shown = v.ixLen < 8 ? v.ixLen : 8;
-        revert UniversalRulesPolicyErrors.ProgramNotAllowed(
-            v.target, bytes8(_loadWord(p, v.ixOff)) & _prefixMask8(shown)
-        );
-    }
-
-    function _tagMatches(AllowedProgram storage r, bytes memory p, SvmPayloadView memory v)
-        internal
-        view
-        returns (bool)
-    {
-        if (r.dataless) return v.ixLen == 0;
-        uint8 len = r.discriminatorLen;
-        if (v.ixLen < len) return false;
-        bytes8 mask = _prefixMask8(len);
-        return (bytes8(_loadWord(p, v.ixOff)) & mask) == (r.discriminator & mask);
-    }
-
-    /// @dev S17, account half: every pin of the matched rule names an index that exists and holds
-    ///      the expected key.
-    function _checkSvmAccountPins(SvmConfig storage cfg, bytes memory p, SvmPayloadView memory v, uint256 rule)
-        internal
-        view
-    {
-        uint256 n = cfg.pins.length;
-        for (uint256 i; i < n;) {
-            SvmAccountPin storage pin = cfg.pins[i];
-            if (pin.ruleIndex == rule) {
-                if (v.count <= pin.accountIndex) {
-                    revert UniversalRulesPolicyErrors.SvmAccountCountBelowPin(i, v.count, pin.accountIndex);
-                }
-                bytes32 actual = _svmAccount(p, pin.accountIndex);
-                if (actual != pin.expected) {
-                    revert UniversalRulesPolicyErrors.SvmAccountPinMismatch(i, pin.accountIndex, pin.expected, actual);
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @dev S17, data half. Offsets resolve from the start or the end of ix_data; init proved the
-    ///      from-end shape reaches at least `len` back, so only the length floor is checked here.
-    ///      Integer reads are little-endian, `len` bytes; the ratio is computed in uint256 and cannot
-    ///      overflow (both operands are at most 64 bits wide).
-    function _checkSvmDataPins(SvmConfig storage cfg, bytes memory p, SvmPayloadView memory v, uint256 rule)
-        internal
-        view
-    {
-        uint256 n = cfg.dataPins.length;
-        for (uint256 i; i < n;) {
-            SvmDataPin storage dp = cfg.dataPins[i];
-            if (dp.ruleIndex == rule) _checkOneDataPin(dp, p, v, i);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _checkOneDataPin(SvmDataPin storage dp, bytes memory p, SvmPayloadView memory v, uint256 i) internal view {
-        uint256 off = _resolveOffset(dp.fromEnd, dp.offset, dp.len, v.ixLen, i);
-        uint256 at = v.ixOff + off;
-        SvmDataPinMode mode = dp.mode;
-
-        if (mode == SvmDataPinMode.EQ) {
-            bytes32 mask = _prefixMask32(dp.len);
-            bytes32 actual = _loadWord(p, at) & mask;
-            bytes32 want = dp.expected & mask;
-            if (actual != want) revert UniversalRulesPolicyErrors.SvmDataPinMismatch(i, want, actual);
-            return;
-        }
-
-        uint256 a = _uintLE(p, at, dp.len);
-        if (mode == SvmDataPinMode.GTE_LE) {
-            if (a < uint256(dp.expected)) {
-                revert UniversalRulesPolicyErrors.SvmDataFloorNotMet(i, a, uint256(dp.expected));
-            }
-        } else if (mode == SvmDataPinMode.LTE_LE) {
-            if (a > uint256(dp.expected)) {
-                revert UniversalRulesPolicyErrors.SvmDataCeilingExceeded(i, a, uint256(dp.expected));
-            }
-        } else {
-            uint256 offB = _resolveOffset(dp.fromEnd, dp.offsetB, dp.len, v.ixLen, i);
-            uint256 b = _uintLE(p, v.ixOff + offB, dp.len);
-            if (a * dp.den < b * dp.num) revert UniversalRulesPolicyErrors.SvmDataRatioNotMet(i, a, b, dp.num, dp.den);
-        }
-    }
-
-    /// @dev The field's start relative to ix_data, or `SvmDataTooShortForPin` if ix_data cannot hold it.
-    function _resolveOffset(bool fromEnd, uint16 offset, uint8 len, uint256 ixLen, uint256 pin)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (fromEnd) {
-            if (ixLen < offset) revert UniversalRulesPolicyErrors.SvmDataTooShortForPin(pin, ixLen);
-            return ixLen - offset;
-        }
-        if (ixLen < uint256(offset) + len) revert UniversalRulesPolicyErrors.SvmDataTooShortForPin(pin, ixLen);
-        return offset;
-    }
-
-    /**
-     * @dev S18 — a CEA-controlled account may appear only where the matched rule pins it. Any other
-     *      occurrence hands a program, running with the CEA's signature, an account it was not
-     *      granted. Accounts absent from `ceaAccounts` are not judged: the list is the owner's
-     *      statement of what holds value. O(count × |ceaAccounts| × |pins|), all bounded.
-     */
-    function _checkCeaAccounts(SvmConfig storage cfg, bytes memory p, SvmPayloadView memory v, uint256 rule)
-        internal
-        view
-    {
-        // Never empty: init requires `expectedCEA` in the list (`_checkCeaAccountList`).
-        uint256 listed = cfg.ceaAccounts.length;
-        for (uint256 i; i < v.count;) {
-            bytes32 key = _svmAccount(p, i);
-            for (uint256 c; c < listed;) {
-                if (cfg.ceaAccounts[c] == key && !_pinnedAt(cfg, rule, i)) {
-                    revert UniversalRulesPolicyErrors.CeaAccountAtUnpinnedIndex(i, key);
-                }
-                unchecked {
-                    ++c;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @dev Whether the matched rule pins `index` at all. S17 has already proved that every pinned
-    ///      position holds its expected key, so "pinned" and "pinned to this key" are the same fact
-    ///      here and the key is not re-compared.
-    function _pinnedAt(SvmConfig storage cfg, uint256 rule, uint256 index) internal view returns (bool) {
-        uint256 n = cfg.pins.length;
-        for (uint256 i; i < n;) {
-            SvmAccountPin storage pin = cfg.pins[i];
-            if (pin.ruleIndex == rule && pin.accountIndex == index) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
     }
 
     // ───────────────────────── svm byte helpers (pure, memory only) ─────────────────────────
-
-    /// @dev The pubkey of account `i` in a parsed payload. Callers bound `i` by the parsed count.
-    function _svmAccount(bytes memory p, uint256 i) internal pure returns (bytes32) {
-        return _loadWord(p, SVM_HEADER_LEN + i * SVM_ACCOUNT_LEN);
-    }
-
-    /// @dev Loads 32 bytes at `off`. Every caller has already proved the bytes it USES are inside
-    ///      `b`; bytes past the end are masked away by the caller, never compared.
-    function _loadWord(bytes memory b, uint256 off) internal pure returns (bytes32 w) {
-        // solhint-disable-next-line no-inline-assembly
-        assembly ("memory-safe") {
-            w := mload(add(add(b, 0x20), off))
-        }
-    }
-
-    function _u32be(bytes memory b, uint256 off) internal pure returns (uint256) {
-        return uint256(uint32(bytes4(_loadWord(b, off))));
-    }
-
-    /// @dev Little-endian unsigned integer of `len` bytes (1..8) starting at `off`.
-    function _uintLE(bytes memory b, uint256 off, uint256 len) internal pure returns (uint256 v) {
-        bytes32 w = _loadWord(b, off);
-        for (uint256 i; i < len;) {
-            v |= uint256(uint8(w[i])) << (8 * i);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @dev Keeps the top `len` bytes of a bytes8. `len` 8 keeps all (a shift by >= 64 is zero).
-    function _prefixMask8(uint256 len) internal pure returns (bytes8) {
-        return bytes8(~(type(uint64).max >> (8 * len)));
-    }
-
-    /// @dev Keeps the top `len` bytes of a bytes32. `len` 32 keeps all.
-    function _prefixMask32(uint256 len) internal pure returns (bytes32) {
-        return bytes32(~(type(uint256).max >> (8 * len)));
-    }
 
     /**
      * @notice Exact-equality assertion on every per-asset spend counter; the change-flow race guard.
@@ -1527,7 +1057,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
     function creditRevert(ConfigId id, address account, bytes32 outboundTxId, address token, uint256 amount) external {
         if (msg.sender != UNIVERSAL_EXECUTOR_MODULE) revert UniversalRulesPolicyErrors.CallerIsNotUEModule(msg.sender);
 
-        AssetCapState storage cap = _assetFor(_universalAssets(id, account), token);
+        AssetCapState storage cap = RulesLib.assetFor(_universalAssets(id, account), token);
 
         if (_credited[outboundTxId]) revert UniversalRulesPolicyErrors.AlreadyCredited(outboundTxId);
         _credited[outboundTxId] = true;
@@ -1549,22 +1079,6 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         Config storage cfg = _configs[id][SESSION_ENGINE][account];
         if (!cfg.initialized) revert UniversalRulesPolicyErrors.NotInitialized(id, account);
         return cfg.assets;
-    }
-
-    /**
-     * @dev Gate 5: the entry for `token` in a listed-asset array, or `AssetNotAllowed`. A linear scan
-     *      at n <= MAX_ASSETS, so up to eight cold reads on a miss. Makes no external call.
-     */
-    function _assetFor(AssetCapState[] storage assets, address token) internal view returns (AssetCapState storage) {
-        uint256 n = assets.length;
-        for (uint256 i; i < n;) {
-            AssetCapState storage a = assets[i];
-            if (a.token == token) return a;
-            unchecked {
-                ++i;
-            }
-        }
-        revert UniversalRulesPolicyErrors.AssetNotAllowed(token);
     }
 
     /**
@@ -1604,7 +1118,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             revert UniversalRulesPolicyErrors.WrongVmForCall(VmFamily.EVM);
         }
 
-        return _svm[id][SESSION_ENGINE][account];
+        return SvmRulebook.read(_svm[id][SESSION_ENGINE][account]);
     }
 
     /**
@@ -1696,32 +1210,6 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
     }
 
     /**
-     * @dev The target and selector pair must appear in the allow-list.
-     * @param  cfg       Config whose allow-list is scanned.
-     * @param  to        Inner call target.
-     * @param  selector  Inner call selector.
-     * @return The matching rule; reverts with `CallNotAllowed` if there is none.
-     */
-    function _requireAllowed(Config storage cfg, address to, bytes4 selector)
-        internal
-        view
-        returns (AllowedCall memory)
-    {
-        uint256 len = cfg.allowedCalls.length;
-        for (uint256 i; i < len;) {
-            AllowedCall storage rule = cfg.allowedCalls[i];
-            if (rule.target == to && rule.selector == selector) {
-                return
-                    AllowedCall(rule.target, rule.selector, rule.beneficiaryOffset, rule.hasBeneficiary, rule.maxValue);
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        revert UniversalRulesPolicyErrors.CallNotAllowed(to, selector);
-    }
-
-    /**
      * @dev Memory slice helper. The bounds branch is unreachable from the three call sites, which
      *      are all length-guarded by gates 12 and 14, and is expected to show as uncovered. It stays
      *      because this is a `pure` helper whose safety must not depend on every future caller.
@@ -1760,30 +1248,36 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         cfg.expectedCEA = incoming.expectedCEA;
         cfg.maxGasPerCall = incoming.maxGasPerCall;
         delete cfg.assets;
-        _storeAssets(cfg.assets, incoming.assets);
+        RulesLib.storeAssets(cfg.assets, incoming.assets);
 
         // Re-initialisation is refused, so in production this array is always empty here. The
         // delete is kept for the stranger-slice path and for tests.
         delete cfg.allowedCalls;
         uint256 len = incoming.allowedCalls.length;
         for (uint256 i; i < len;) {
-            cfg.allowedCalls.push(incoming.allowedCalls[i]);
-            unchecked {
-                ++i;
-            }
-        }
-    }
+            AllowedCall memory src = incoming.allowedCalls[i];
 
-    /// @dev Wire asset caps into storage, element by element, every `spent` forced to zero. Shared by
-    ///      both universal families. The caller deletes `dst` first, as for every other array.
-    function _storeAssets(AssetCapState[] storage dst, AssetCap[] memory src) internal {
-        uint256 len = src.length;
-        for (uint256 i; i < len;) {
-            dst.push(
-                AssetCapState({
-                    token: src[i].token, maxPerCall: src[i].maxPerCall, maxTotal: src[i].maxTotal, spent: 0
-                })
-            );
+            // MEMBER BY MEMBER, NOT `push(src)`. Since `AllowedCall` gained `ArgPin[] pins`, Solidity
+            // cannot copy a memory struct holding a dynamic array into a storage array in one
+            // assignment — the same restriction that already forced the element-by-element loops in
+            // `_storeNative` and `_storeSvm`. `push()` with no argument appends a zeroed entry and
+            // returns the storage reference to fill in.
+            AllowedCall storage dst = cfg.allowedCalls.push();
+            dst.target = src.target;
+            dst.selector = src.selector;
+            dst.beneficiaryOffset = src.beneficiaryOffset;
+            dst.hasBeneficiary = src.hasBeneficiary;
+            dst.maxValue = src.maxValue;
+
+            uint256 pinCount = src.pins.length;
+            for (uint256 p; p < pinCount;) {
+                // `ArgPin` has no dynamic member, so this one still assigns wholesale.
+                dst.pins.push(src.pins[p]);
+                unchecked {
+                    ++p;
+                }
+            }
+
             unchecked {
                 ++i;
             }
@@ -1821,58 +1315,6 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         uint256 len = incoming.pins.length;
         for (uint256 i; i < len;) {
             cfg.pins.push(incoming.pins[i]);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /**
-     * @dev Copies decoded SVM wire terms into storage. The SVM counterpart of `_store`.
-     *      - Forces every asset's `spent` to zero; URP owns it.
-     *      - Every dynamic member is copied ELEMENT BY ELEMENT, same shape and same reason as
-     *        `allowedCalls` and `pins`.
-     *      - Does not set `initialized`; the caller does, immediately after this returns.
-     */
-    function _storeSvm(SvmConfig storage cfg, SvmTerms memory incoming) internal {
-        cfg.validUntil = incoming.validUntil;
-        cfg.expectedCEA = incoming.expectedCEA;
-        cfg.gatewayProgram = incoming.gatewayProgram;
-        cfg.maxGasPerCall = incoming.maxGasPerCall;
-        delete cfg.assets;
-        _storeAssets(cfg.assets, incoming.assets);
-
-        delete cfg.ceaAccounts;
-        uint256 len = incoming.ceaAccounts.length;
-        for (uint256 i; i < len;) {
-            cfg.ceaAccounts.push(incoming.ceaAccounts[i]);
-            unchecked {
-                ++i;
-            }
-        }
-
-        delete cfg.programs;
-        len = incoming.programs.length;
-        for (uint256 i; i < len;) {
-            cfg.programs.push(incoming.programs[i]);
-            unchecked {
-                ++i;
-            }
-        }
-
-        delete cfg.pins;
-        len = incoming.pins.length;
-        for (uint256 i; i < len;) {
-            cfg.pins.push(incoming.pins[i]);
-            unchecked {
-                ++i;
-            }
-        }
-
-        delete cfg.dataPins;
-        len = incoming.dataPins.length;
-        for (uint256 i; i < len;) {
-            cfg.dataPins.push(incoming.dataPins[i]);
             unchecked {
                 ++i;
             }

@@ -99,7 +99,8 @@ contract EngineTest is BaseTest {
             selector: SUPPLY_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 0
+            maxValue: 0,
+            pins: noPins()
         });
         return universalInitData(
             Config({
