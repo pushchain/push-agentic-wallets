@@ -75,6 +75,11 @@ interface IAGW {
     ///         for `RULES_GRANTED` / `RULES_REVOKED`.
     event Checkpointed(uint64 indexed seq, CheckpointKind kind, bytes32 ref, uint64 blockNumber);
 
+    /// @notice The owner renamed the wallet. Fired by `setLabel` only, with the label as passed.
+    /// @dev    `""` means the label was reset to the default `AGW <index + 1>`. The label chosen at
+    ///         deployment is carried by the factory's `WalletDeployed`, not by this event.
+    event LabelSet(string label);
+
     // ═══════════════════════════════ AGW_2: OWNER DOOR ═══════════════════════════════
 
     /// @notice The owner door: executes a single call or a batch on the owner's behalf. No policy is
@@ -89,6 +94,10 @@ interface IAGW {
         OwnerIntent calldata intent,
         bytes calldata sig
     ) external;
+
+    /// @notice Sets the wallet's label; `""` resets it to the default `AGW <index + 1>`. Owner or the
+    ///         wallet itself. At most `MAX_LABEL_BYTES` bytes. Cosmetic: writes no checkpoint.
+    function setLabel(string calldata label) external;
 
     // ═══════════════════════════════ AGW_3: AGENT DOOR ═══════════════════════════════
 
@@ -118,8 +127,9 @@ interface IAGW {
     /// @notice Revokes every rules set on this wallet. Owner or the wallet itself.
     function revokeAllRules() external;
 
-    /// @notice Factory-only, once: installs the session engine as the account's sole validator.
-    function initializeAccount() external;
+    /// @notice Factory-only, once: stores the deploy-time label (if any) and installs the session
+    ///         engine as the account's sole validator.
+    function initializeAccount(string calldata label) external;
 
     /// @notice Installs a validator module. Owner only.
     function installModule(uint256 moduleTypeId, address module, bytes calldata initData) external;
@@ -140,6 +150,10 @@ interface IAGW {
 
     /// @notice The wallet's owner, read from the clone's immutable args.
     function owner() external view returns (address);
+
+    /// @notice The wallet's label: the owner's, or `AGW <index + 1>` if none is set (the index is the
+    ///         factory's per-owner index, so an owner's wallets read `AGW 1`, `AGW 2`, …).
+    function label() external view returns (string memory);
 
     /// @notice The factory that deployed this wallet.
     function factory() external view returns (address);

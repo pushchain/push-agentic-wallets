@@ -28,8 +28,8 @@ import { PushChainLib } from "../../src/libraries/PushChainLib.sol";
  * @dev    NO MOCK APPEARS IN THIS FILE, by design. The whole point is the absence of one.
  */
 contract PRC20SourceForkTest is Test {
-    /// @dev `USDC.eth` on Donut. From `deployments/address-book/donut_push_core.json`, where it is
-    ///      recorded as the live PRC20 whose `symbol()` is "USDC.eth" — NOT the deprecated
+    /// @dev `USDC.eth` on Donut: the live PRC20 whose `symbol()` is "USDC.eth" (re-checked with
+    ///      `cast call <addr> 'symbol()(string)'` on 2026-10-07) — NOT the deprecated
     ///      "USDC.eth.old" at `0x387b9C8D...`. Never invented.
     address internal constant USDC_ETH = 0x7A58048036206bB898008b5bBDA85697DB1e5d66;
 

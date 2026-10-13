@@ -539,11 +539,11 @@ contract PushAgentWalletTest is BaseTest {
         // non-factory callers are refused
         vm.prank(WALLET_OWNER);
         vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-        fresh.initializeAccount();
+        fresh.initializeAccount("");
 
         vm.prank(AGENT);
         vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-        fresh.initializeAccount();
+        fresh.initializeAccount("");
 
         // the factory succeeds, and both events fire
         vm.expectEmit(true, true, true, true, address(fresh));
@@ -552,14 +552,14 @@ contract PushAgentWalletTest is BaseTest {
         emit IAGW.AccountInitialized(WALLET_OWNER, address(engine));
 
         vm.prank(FACTORY);
-        fresh.initializeAccount();
+        fresh.initializeAccount("");
 
         assertTrue(fresh.isModuleInstalled(1, address(engine), ""), "engine installed as sole validator");
 
         // second call reverts
         vm.prank(FACTORY);
         vm.expectRevert(AGWErrors.AlreadyInitialized.selector);
-        fresh.initializeAccount();
+        fresh.initializeAccount("");
     }
 
     // ═══════════════════════════════════ W-21 ═══════════════════════════════════
@@ -653,7 +653,7 @@ contract PushAgentWalletTest is BaseTest {
      * test fails and a human decides whether the ABI change was intended.
      */
     function test_W25_Clone_NoUpgradeSurface_ExactSelectorSet() public view {
-        bytes4[] memory expected = new bytes4[](31);
+        bytes4[] memory expected = new bytes4[](33);
         uint256 i;
 
         // one-shot initialisation
@@ -665,6 +665,9 @@ contract PushAgentWalletTest is BaseTest {
         expected[i++] = AGW.grantRulesWithSig.selector;
         expected[i++] = AGW.executeWithSig.selector;
         expected[i++] = AGW.domainSeparator.selector;
+        // L-wallet-label PRD: the owner's label and its view.
+        expected[i++] = AGW.setLabel.selector;
+        expected[i++] = AGW.label.selector;
         expected[i++] = AGW.revokeRules.selector;
         expected[i++] = AGW.revokeAllRules.selector;
         // agent door
@@ -695,7 +698,7 @@ contract PushAgentWalletTest is BaseTest {
         expected[i++] = AGW.supportsInterface.selector;
         expected[i++] = AGW.isValidSignature.selector;
 
-        assertEq(i, 31, "the hard-coded list must be complete");
+        assertEq(i, 33, "the hard-coded list must be complete");
         assertSelectorSet("AGW", expected);
     }
 
@@ -722,7 +725,7 @@ contract PushAgentWalletTest is BaseTest {
         for (uint256 i; i < callers.length; ++i) {
             vm.prank(callers[i]);
             vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-            walletImpl.initializeAccount();
+            walletImpl.initializeAccount("");
         }
     }
 
@@ -807,8 +810,9 @@ contract PushAgentWalletTest is BaseTest {
     // ═════════════════════════════ storage layout ═════════════════════════════
 
     /**
-     * THE WALLET'S WHOLE STATE IS SIX DECLARATIONS, in this order. Asserted against solc's own
-     * storageLayout, not a slot read.
+     * THE WALLET'S WHOLE STATE IS SEVEN DECLARATIONS, in this order. Asserted against solc's own
+     * storageLayout, not a slot read. (Six before the L-wallet-label PRD appended `_label` at slot 3;
+     * the test name is specification and is kept.)
      *
      * `_initialized` (bool), `_grantNonce` (uint64), `_checkpointCount` (uint64) and
      * `_lastCheckpointBlock` (uint64) MUST share slot 0: the packing keeps every checkpoint a rewrite
@@ -818,14 +822,15 @@ contract PushAgentWalletTest is BaseTest {
     function test_StorageLayout_ExactlySixDeclarations() public view {
         string memory artifact = vm.readFile("out/AGW.sol/AGW.json");
 
-        string[] memory labels = new string[](6);
+        string[] memory labels = new string[](7);
         labels[0] = "_initialized";
         labels[1] = "_grantNonce";
         labels[2] = "_checkpointCount";
         labels[3] = "_lastCheckpointBlock";
         labels[4] = "_installedValidators";
         labels[5] = "_nonces";
-        string[6] memory slots = ["0", "0", "0", "0", "1", "2"];
+        labels[6] = "_label";
+        string[7] memory slots = ["0", "0", "0", "0", "1", "2", "3"];
 
         for (uint256 i; i < labels.length; ++i) {
             string memory base = string.concat(".storageLayout.storage[", vm.toString(i), "]");
@@ -839,10 +844,10 @@ contract PushAgentWalletTest is BaseTest {
             );
         }
 
-        // exactly six: index 6 must not exist
+        // exactly seven: index 7 must not exist
         assertFalse(
-            vm.keyExistsJson(artifact, ".storageLayout.storage[6]"),
-            "a seventh storage declaration appeared - the wallet's whole state is six"
+            vm.keyExistsJson(artifact, ".storageLayout.storage[7]"),
+            "an eighth storage declaration appeared - the wallet's whole state is seven"
         );
 
         // the packing of slot 0

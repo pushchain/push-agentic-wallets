@@ -130,7 +130,7 @@ contract AGWFactory is
      *           deployment unwinds, so an uninitialised wallet can never exist on-chain.
      *         - Emits `WalletDeployed`.
      *
-     * @param  label   Free-form label, emitted in the event and never stored.
+     * @param  label   Free-form label, emitted in the event and stored on the wallet (`AGW.label`).
      * @return wallet  Address of the newly deployed wallet.
      */
     function deployWallet(string calldata label) external whenNotPaused returns (address wallet) {
@@ -158,7 +158,7 @@ contract AGWFactory is
      * @param  intent  The owner's intent. Only `owner`, `wallet`, `executor`, `index`, `deadline` and
      *                 `signerChainId` are read here.
      * @param  sig     The owner's signature over `intent`; ignored when the caller is the owner.
-     * @param  label   Free-form label, emitted and never stored. Not signed.
+     * @param  label   Free-form label, emitted, and stored on the wallet (`AGW.label`). Not signed.
      * @return wallet  The deployed wallet.
      */
     function deployWalletWithSig(OwnerIntent calldata intent, bytes calldata sig, string calldata label)
@@ -220,7 +220,7 @@ contract AGWFactory is
 
         _records[wallet] = WalletRecord({ owner: owner, index: index });
 
-        IAGWInit(wallet).initializeAccount();
+        IAGWInit(wallet).initializeAccount(label);
 
         emit WalletDeployed(owner, index, wallet, label);
     }

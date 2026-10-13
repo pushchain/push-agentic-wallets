@@ -199,6 +199,12 @@ uint256 constant MAX_PINS = 8;
 uint256 constant MAX_ASSETS = 8;
 
 /**
+ * @dev Longest wallet label, in BYTES (not characters). `AGW.setLabel` and the deploy path refuse a
+ *      longer one, so every `label()` read is bounded. FILE-LEVEL so the SDK can see it.
+ */
+uint256 constant MAX_LABEL_BYTES = 64;
+
+/**
  * @dev The rules-envelope version URP accepts. Every action policy's `initData` is
  *      `abi.encode(uint16 version, string chainNamespace, bytes body)`, the same shape in every mode.
  *      URP reads the version from the FIRST WORD before decoding anything else and refuses any other
