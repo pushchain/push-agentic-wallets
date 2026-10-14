@@ -111,7 +111,7 @@ contract NativeRulesTest is Test {
 
         assertEq(cfg.pins.length, 1, "exactly one pin");
         assertEq(cfg.pins[0].offset, 4, "the beneficiary is the FIRST argument word, at offset 4");
-        assertEq(cfg.pins[0].expected, bytes32(uint256(uint160(wallet))), "the pin must name the wallet");
+        assertEq(cfg.pins[0].value, bytes32(uint256(uint160(wallet))), "the pin must name the wallet");
     }
 
     /// @dev Offset 36 is the second argument word. Off by four and the meter reads the wrong bytes.

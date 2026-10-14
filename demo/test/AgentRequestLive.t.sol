@@ -7,7 +7,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { IAGW } from "../../src/interfaces/IAGW.sol";
 import { AGW } from "../../src/AGW.sol";
 import { AGWErrors } from "../../src/libraries/Errors.sol";
-import { AllowedCall, Config, Multicall } from "../../src/libraries/Types.sol";
+import { AllowedCall, ArgPin, Config, Multicall } from "../../src/libraries/Types.sol";
 import { ConfigId } from "smartsessions/DataTypes.sol";
 import { AgentRequest } from "../lib/AgentRequest.sol";
 import { Requests } from "../lib/Requests.sol";
@@ -74,7 +74,12 @@ contract AgentRequestLiveTest is BaseTest {
     function _initData() internal view returns (bytes memory) {
         AllowedCall[] memory allowed = new AllowedCall[](1);
         allowed[0] = AllowedCall({
-            target: FAR_TARGET, selector: STAKE_FOR, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0
+            target: FAR_TARGET,
+            selector: STAKE_FOR,
+            beneficiaryOffset: 4,
+            hasBeneficiary: true,
+            maxValue: 0,
+            pins: new ArgPin[](0)
         });
 
         return universalInitData(

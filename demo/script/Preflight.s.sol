@@ -290,11 +290,6 @@ contract Preflight is Script {
         if (phase == 2) {
             _check(IERC20(prc20).balanceOf(agw) > 0, "wallet funded", "the agent has nothing to spend");
         }
-        _check(
-            IERC20(prc20).allowance(agw, AddressBook.donut("UniversalGatewayPC")) > 0,
-            "gateway armed",
-            "EVERY agent request reverts inside the gateway - the least obvious prerequisite"
-        );
         _check(agw.balance >= AGW_MIN_PC, "wallet PC", "outbounds cannot pay the gas swap; run act1c");
 
         _rules(agw);

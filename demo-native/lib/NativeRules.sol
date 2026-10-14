@@ -4,7 +4,9 @@ pragma solidity 0.8.26;
 import { Session, ActionData, PolicyData, ERC7739Data, ERC7739Context } from "smartsessions/DataTypes.sol";
 import { ISessionValidator } from "smartsessions/interfaces/ISessionValidator.sol";
 
-import { NativeConfig, NativeTerms, ArgPin, AmountRule, ENVELOPE_VERSION } from "../../src/libraries/Types.sol";
+import {
+    NativeConfig, NativeTerms, ArgPin, PinOp, AmountRule, ENVELOPE_VERSION, UNLIMITED_CALLS
+} from "../../src/libraries/Types.sol";
 import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
 
 import { AddressBook } from "./AddressBook.sol";
@@ -139,7 +141,7 @@ library NativeRules {
         // THE BENEFICIARY PIN. Full-word equality: an address is left-padded by the ABI, and URP
         // compares all 32 bytes on purpose — a non-zero high half is a MISMATCH, which also proves
         // the padding is clean. Masking would silently accept a dirty word.
-        pins[0] = ArgPin({ offset: BENEFICIARY_OFFSET, expected: bytes32(uint256(uint160(wallet))) });
+        pins[0] = ArgPin({ offset: BENEFICIARY_OFFSET, op: PinOp.EQ, value: bytes32(uint256(uint160(wallet))) });
 
         cfg = NativeConfig({
             initialized: false, // forced true by URP
@@ -201,7 +203,7 @@ library NativeRules {
             pins = new ArgPin[](0); // <- THE HOLE
         } else {
             pins = new ArgPin[](1);
-            pins[0] = ArgPin({ offset: SPENDER_OFFSET, expected: bytes32(uint256(uint160(pinnedSpender))) });
+            pins[0] = ArgPin({ offset: SPENDER_OFFSET, op: PinOp.EQ, value: bytes32(uint256(uint160(pinnedSpender))) });
         }
 
         // FIELD-BY-FIELD, for the same via_ir stack reason as `_unstakeConfig`.
@@ -218,7 +220,7 @@ library NativeRules {
         cfg.valueSpent = 0;
         cfg.amount = noAmount;
         cfg.amountSpent = 0;
-        cfg.maxCalls = 0; // unlimited — the act needs two calls on the unpinned half
+        cfg.maxCalls = UNLIMITED_CALLS; // the act needs two calls on the unpinned half; 0 is refused (ZeroMaxCalls)
         cfg.callsUsed = 0;
         cfg.pins = pins;
     }

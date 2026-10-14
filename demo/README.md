@@ -4,9 +4,9 @@ A user on Ethereum owns an agent wallet (an AGW) on Push Chain without ever hold
 key, grants it rules narrow enough to fit on one screen, and watches an agent move real capital
 across a chain boundary, while the attacks in the gauntlet die on-chain.
 
-**Status:** run end to end on Donut and Sepolia against the current (v5) contracts on 2026-10-10/11,
-at `DEMO_SCALE_PERCENT=4` (Bob held 4 USDC on Sepolia). Every act was broadcast and every far-chain
-effect was confirmed on Sepolia.
+**Status:** updated for the v6 contracts (2026-10-14); the v6 testnet run is pending. Earlier, it ran end
+to end on Donut and Sepolia against v5 on 2026-10-10/11, at `DEMO_SCALE_PERCENT=4` (Bob held 4 USDC on
+Sepolia), with every act broadcast and every far-chain effect confirmed on Sepolia.
 
 **The operator's script is [`DEMO_MANUAL.md`](DEMO_MANUAL.md).** This file is the short version.
 
@@ -118,7 +118,7 @@ assert it did not. That is how an evaluator tells the agent's failure from the o
 | `script/Preflight.s.sol` · `Watch.s.sol` | the checklist, and the cross-chain wait |
 | `state/ledger.json` | per-run state. Gitignored |
 
-Our own contract addresses are read from `deployments/address-book-v5/push_agw_contracts.json` and
+Our own contract addresses are read from `deployments/address-book-v6/push_agw_contracts.json` and
 are never copied into this folder.
 
 ## Things that cost a debugging session each

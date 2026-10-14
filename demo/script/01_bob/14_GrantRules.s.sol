@@ -18,6 +18,7 @@ import {
     UniversalTerms,
     AssetCap,
     AllowedCall,
+    ArgPin,
     Config,
     SEND_OUTBOUND_SELECTOR,
     ENVELOPE_VERSION
@@ -178,7 +179,8 @@ contract GrantRules is Script {
             selector: StakeDummy.stakeFor.selector,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 0 // not payable; gate 16 rejects any entry carrying value
+            maxValue: 0, // not payable; gate 16 rejects any entry carrying value
+            pins: new ArgPin[](0) // the beneficiary check above already pins the one argument that matters
         });
 
         // And unstake, which takes no arguments — the caller is the staker.
@@ -187,7 +189,8 @@ contract GrantRules is Script {
             selector: StakeDummy.unstake.selector,
             beneficiaryOffset: 0,
             hasBeneficiary: false,
-            maxValue: 0
+            maxValue: 0,
+            pins: new ArgPin[](0)
         });
 
         // ONE LISTED TOKEN, with its own caps. The token is the PRC20 ON PUSH; the gateway routes

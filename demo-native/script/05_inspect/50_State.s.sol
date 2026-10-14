@@ -7,7 +7,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { IAGW } from "../../../src/interfaces/IAGW.sol";
 import { IUniversalRulesPolicy } from "../../../src/interfaces/IUniversalRulesPolicy.sol";
-import { ModeSlot, NativeConfig } from "../../../src/libraries/Types.sol";
+import { ModeSlot, NativeConfig, UNLIMITED_CALLS } from "../../../src/libraries/Types.sol";
 import { StakeDummy } from "../../contracts/StakeDummy.sol";
 import { AddressBook } from "../../lib/AddressBook.sol";
 import { Amounts } from "../../lib/Amounts.sol";
@@ -172,7 +172,7 @@ contract State is Script {
         }
         DemoLog.kv(
             "    calls",
-            cfg.maxCalls == 0
+            cfg.maxCalls == UNLIMITED_CALLS
                 ? string.concat(vm.toString(uint256(cfg.callsUsed)), " used, no limit")
                 : string.concat(vm.toString(uint256(cfg.callsUsed)), " of ", vm.toString(uint256(cfg.maxCalls)))
         );

@@ -14,7 +14,7 @@ import { VmSafe } from "forge-std/Vm.sol";
  *
  *         TWO FILES, TWO SHAPES, read rather than rewritten:
  *
- *           · NESTED — `deployments/address-book-v5/push_agw_contracts.json` holds our own
+ *           · NESTED — `deployments/address-book-v6/push_agw_contracts.json` holds our own
  *                      deployment under `.contracts.<name>.address`, beside sizes, tx hashes and
  *                      notes. It is the permanent record of what we shipped and is not reshaped
  *                      to suit a reader, and never copied into a demo file.
@@ -34,7 +34,7 @@ library AddressBook {
 
     /// @dev OUR OWN contracts, from the current deployment's address book. The validator's
     ///      address is an input to every rules id, so every script reads the same book.
-    string internal constant OURS_DIR = "deployments/address-book-v5/";
+    string internal constant OURS_DIR = "deployments/address-book-v6/";
 
     /// @dev The named failure this library exists to produce. Names the file and the key.
     error MissingAddress(string file, string name);

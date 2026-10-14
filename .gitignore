@@ -28,3 +28,7 @@ docs-internal/
 demo/state/
 demo-native/state/
 demo/ref_contracts/
+
+
+AGENTS.md
+.codex/

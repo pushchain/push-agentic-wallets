@@ -59,8 +59,7 @@ contract ArriveComplete is Script {
         address uea = Ledger.addr("uea", "10_Arrive");
         address agw = Ledger.addr("agw", "10_Arrive");
         address prc20 = AddressBook.donut("PRC20_USDC");
-        address gatewayPC = AddressBook.donut("UniversalGatewayPC");
-        address factory = AddressBook.ours("factoryProxy");
+                address factory = AddressBook.ours("factoryProxy");
 
         DemoLog.header("ACT 1", "The wallet is built");
         DemoLog.addrPlain("Bob signs", vm.addr(bobPk));
@@ -74,16 +73,16 @@ contract ArriveComplete is Script {
         (, bool deployed) = IAGWFactory(factory).predictWallet(uea, 0);
         if (deployed) {
             DemoLog.ok("already built", "the wallet exists; nothing to do");
-            _report(agw, prc20, gatewayPC);
+            _report(agw, prc20);
             DemoLog.footer();
             return;
         }
 
-        Multicall[] memory calls = Identity.arrivalCalls(factory, prc20, agw, gatewayPC, Amounts.bridge(), WALLET_LABEL);
+        Multicall[] memory calls = Identity.arrivalCalls(factory, prc20, agw, Amounts.bridge(), WALLET_LABEL);
         (UniversalPayload memory payload, bytes memory signature) =
             BobPayload.signedMulticall(uea, calls, bobPk, VALID_FOR);
 
-        DemoLog.kv("Payload", "3 entries, one signature");
+        DemoLog.kv("Payload", "2 entries, one signature");
         DemoLog.note("    1  deployWallet          -> the UEA becomes the owner");
         DemoLog.note(
             string.concat(
@@ -92,7 +91,7 @@ contract ArriveComplete is Script {
                 "   -> into an address computed before it existed"
             )
         );
-        DemoLog.note("    3  approve the gateway   -> through the owner door");
+        DemoLog.note("    No gateway approval: the wallet approves each outbound itself");
         DemoLog.kv("UEA nonce", vm.toString(payload.nonce));
         DemoLog.blank();
 
@@ -100,12 +99,12 @@ contract ArriveComplete is Script {
         IUEA(uea).executeUniversalTx(payload, signature);
         vm.stopBroadcast();
 
-        _assertPostConditions(factory, uea, agw, prc20, gatewayPC);
-        _report(agw, prc20, gatewayPC);
+        _assertPostConditions(factory, uea, agw, prc20);
+        _report(agw, prc20);
 
         DemoLog.blank();
         DemoLog.line(DemoLog.bold("One Ethereum transaction and one signature."));
-        DemoLog.line(DemoLog.bold("Bob has a funded, armed agent wallet on a chain he has never touched."));
+        DemoLog.line(DemoLog.bold("Bob has a funded agent wallet on a chain he has never touched."));
         DemoLog.footer();
     }
 
@@ -125,7 +124,7 @@ contract ArriveComplete is Script {
      *      assertion pass is worth more than a claim, and a silent partial success here would only
      *      surface two acts later.
      */
-    function _assertPostConditions(address factory, address uea, address agw, address prc20, address gatewayPC)
+    function _assertPostConditions(address factory, address uea, address agw, address prc20)
         internal
         view
     {
@@ -133,26 +132,23 @@ contract ArriveComplete is Script {
         if (!deployed || predicted != agw || agw.code.length == 0) revert SetupFailed(agw);
 
         if (IERC20(prc20).balanceOf(agw) < Amounts.bridge()) revert SetupFailed(agw);
-        if (IERC20(prc20).allowance(agw, gatewayPC) == 0) revert SetupFailed(agw);
 
         DemoLog.ok("deployed", "at exactly the predicted address");
         DemoLog.ok("funded", DemoLog.formatAmount(IERC20(prc20).balanceOf(agw), 6, "pUSDC"));
-        DemoLog.ok("armed", "gateway allowance set");
 
         if (keccak256(bytes(IAGW(agw).label())) != keccak256(bytes(WALLET_LABEL))) revert SetupFailed(agw);
-        if (IAGW(agw).checkpointCount() != 1) revert SetupFailed(agw);
-        DemoLog.ok("labelled", "the label is stored on the wallet; one owner call, one checkpoint");
+        if (IAGW(agw).checkpointCount() != 0) revert SetupFailed(agw);
+        DemoLog.ok("labelled", "the label is stored on the wallet; no owner-door call yet, no checkpoint");
     }
 
-    function _report(address agw, address prc20, address gatewayPC) internal view {
+    function _report(address agw, address prc20) internal view {
         DemoLog.blank();
         DemoLog.addr("AGW", agw, true);
         DemoLog.money("Holds", IERC20(prc20).balanceOf(agw), 6, "pUSDC");
         DemoLog.money("PC", agw.balance, 18, "PC");
-        DemoLog.kv("Allowance", IERC20(prc20).allowance(agw, gatewayPC) == type(uint256).max ? "unlimited" : "set");
         DemoLog.kv("Label", IAGW(agw).label());
         DemoLog.note("    Stored on the wallet at deploy; the owner can rename it with setLabel.");
         DemoLog.kv("Checkpoints", vm.toString(uint256(IAGW(agw).checkpointCount())));
-        DemoLog.note("    One so far: the gateway approval went through the owner door.");
+        DemoLog.note("    None so far: deploying and funding the wallet touch no owner door.");
     }
 }

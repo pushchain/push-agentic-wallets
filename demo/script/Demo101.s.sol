@@ -168,11 +168,11 @@ contract Demo101 is Script {
         _step(3, unicode"Bridging 10.00 USDC from Sepolia", "sendUniversalTx");
         _step(4, unicode"Deploying agent wallet clone", "deployWallet");
         _step(5, unicode"Installing session engine", "SmartSession");
-        _step(6, unicode"Arming gateway allowance", "approve(max)");
+        _step(6, unicode"Gateway approval: none needed", "auto per outbound");
         _step(7, unicode"Granting the rules", "grantRules");
 
         DemoLog.blank();
-        DemoLog.ok("wallet live", DemoLog.bold("funded, armed, rules granted"));
+        DemoLog.ok("wallet live", DemoLog.bold("funded, rules granted"));
         DemoLog.footer();
         console.log("");
     }

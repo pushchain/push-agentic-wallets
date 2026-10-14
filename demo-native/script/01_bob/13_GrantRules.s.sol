@@ -63,7 +63,7 @@ contract GrantRules is Script {
         DemoLog.blank();
         DemoLog.line(DemoLog.bold("The pinned beneficiary:"));
         DemoLog.kv("  offset", string.concat(vm.toString(uint256(r.cfg.pins[0].offset)), " (first argument word)"));
-        DemoLog.kv("  must equal", vm.toString(r.cfg.pins[0].expected));
+        DemoLog.kv("  must equal", vm.toString(r.cfg.pins[0].value));
         DemoLog.note("    One word of calldata. It is what stops the agent staking to itself");
         DemoLog.note("    and then unstaking to itself from its own account.");
         DemoLog.footer();

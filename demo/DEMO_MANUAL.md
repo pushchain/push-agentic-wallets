@@ -10,7 +10,7 @@ hard ceiling on everything the agent can lose. Every agent action is checked by 
 time. The agent's honesty is never assumed.
 
 **This manual is for the current contracts** (`AGW`, `AGWFactory`, `UniversalRulesPolicy`, `AgentValidator`;
-addresses in `deployments/address-book-v5/`). Everything below the line marked **demo-v1 history** near the
+addresses in `deployments/address-book-v6/`). Everything below the line marked **demo-v1 history** near the
 end describes the first demo, against contracts that are no longer in use. Do not follow its addresses.
 
 ---
@@ -111,10 +111,11 @@ just act1b
 ```
 
 - Chain **Donut** · broadcasts with the **relayer** key, on a payload **Bob** signed.
-- One signed multicall: `deployWallet("demo-agw-1")`, move the bridged pUSDC into the wallet, and approve
-  the gateway through the wallet's owner door.
-- Prints the wallet's **label** (`demo-agw-1`, stored on the wallet) and **checkpoints: 1** (the gateway
-  approval was one owner-door call).
+- One signed multicall: `deployWallet("demo-agw-1")`, then move the bridged pUSDC into the wallet. There is
+  no gateway approval: since v6 the wallet approves the gateway for exactly each outbound's amount and clears
+  it after.
+- Prints the wallet's **label** (`demo-agw-1`, stored on the wallet) and **checkpoints: 0** (no owner-door
+  call yet).
 - Reverts `UEANotDeployed` / `UEANotFunded` / `NoPCForGas` if the act1a relay has not landed. Re-run it.
 - **Idempotent by detection**: if the AGW already exists it exits cleanly.
 
@@ -396,7 +397,7 @@ just watch-returned    # after act4c: the AGW's pUSDC rises (polls DONUT)
 | `ActTwoHasNotRun` | you ran `g5` before act2 | Run act2 first |
 | Reward pool empty | rehearsals drained it | Zero `.StakeDummy` in `config/sepolia.json`, then `just fund` and `just stakedummy`. Preflight should have caught it |
 | `MissingLedgerKey(key, writtenBy)` | a step was skipped | The error names the script that writes it. Run that |
-| `MissingAddress(file, name)` | address file gap | Nothing is discovered at runtime: check `demo/config/` and `deployments/address-book-v5/` |
+| `MissingAddress(file, name)` | address file gap | Nothing is discovered at runtime: check `demo/config/` and `deployments/address-book-v6/` |
 
 **Droppable, first to go:** G6 or G7 → then G4 or G5 (one cap demo suffices) → then acts 4c/4d. If the
 relay is unreliable, end at 4b on "the agent cannot bring it home" and describe the rest.
@@ -471,7 +472,7 @@ that run, not configuration.
 SETUP     just setup                        # tokens, quote, fund, stakedummy, fund-agent, preflight
 ACT 1     just act1a                        # Sepolia: the ONLY Ethereum tx
           … wait for the relay …
-          just act1b                        # wallet deployed, labelled, funded, armed
+          just act1b                        # wallet deployed, labelled, funded
           just act1c                        # 1 PC: the seam
           just act1d ; just watch-cea       # approval + CEA deploys. WAIT for it
           just act1e                        # THE RULES: leave them on screen

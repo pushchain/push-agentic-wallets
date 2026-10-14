@@ -6,7 +6,7 @@ import { VmSafe } from "forge-std/Vm.sol";
 /**
  * @title  AddressBook
  * @notice Resolves every address the demo uses from two places, so that no script ever carries a
- *         hardcoded address: our own contracts from `deployments/address-book-v5/`, and Push core
+ *         hardcoded address: our own contracts from `deployments/address-book-v6/`, and Push core
  *         and Sepolia infrastructure from the demo-owned files in `demo/config/`.
  *
  * @dev    THE ONE RULE: this library never returns `address(0)`. A key that is absent, or present
@@ -45,7 +45,7 @@ library AddressBook {
      *      from one deployment mixed with an engine from another derives ids that address an
      *      empty config.
      */
-    string internal constant OURS_DIR = "deployments/address-book-v5/";
+    string internal constant OURS_DIR = "deployments/address-book-v6/";
 
     /// @dev The named failure this library exists to produce. Names the file and the key.
     error MissingAddress(string chain, string name);

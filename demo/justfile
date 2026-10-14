@@ -93,7 +93,7 @@ act1a:
 act1a-dry:
     forge script demo/script/01_bob/10_Arrive.s.sol:Arrive {{_sepolia}}
 
-# Bob signs, a stranger submits: the wallet is deployed, funded and armed.
+# Bob signs, a stranger submits: the wallet is deployed and funded.
 act1b:
     forge script demo/script/01_bob/11_ArriveComplete.s.sol:ArriveComplete {{_donut}} {{_go}}
 

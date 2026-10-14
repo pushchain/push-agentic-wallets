@@ -6,10 +6,8 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { AddressBook } from "./AddressBook.sol";
 import { BobPayload } from "./BobPayload.sol";
 import { ICEAFactory } from "./PushCore.sol";
-import { Requests } from "./Requests.sol";
 import { IAGWFactory } from "../../src/interfaces/IAGWFactory.sol";
 import { Multicall } from "../../src/libraries/Types.sol";
-import { ExecutionLib } from "../../src/libraries/ExecutionLib.sol";
 
 /**
  * @title  Identity
@@ -113,12 +111,12 @@ library Identity {
     // ─────────────────────────── the arrival payload ───────────────────────────
 
     /**
-     * @notice The three entries that turn a credited UEA into a funded, armed agent wallet.
+     * @notice The two entries that turn a credited UEA into a funded agent wallet.
      *
      * @dev    DECLARED ONCE, HERE, because two scripts submit these same entries by different
      *         routes: `10_Arrive` attaches them to the inbound bridge (inert on today's build) and
      *         `11_ArriveComplete` relays them as a signed payload (the path that works). Two
-     *         hand-maintained copies of a three-entry multicall is precisely the duplication that
+     *         hand-maintained copies of a two-entry multicall is precisely the duplication that
      *         stays correct until one of them is edited.
      *
      *         WHY EACH ENTRY WORKS:
@@ -127,15 +125,15 @@ library Identity {
      *              initialises the wallet atomically, so it is live for entry 3.
      *           2. The pUSDC was minted to the UEA before this payload runs, so the balance is
      *              there — and the destination was computed before the wallet existed.
-     *           3. THE OWNER DOOR, and the least obvious prerequisite in the whole flow. Without
-     *              this allowance `UniversalGatewayPC._burnPRC20` cannot `transferFrom` the wallet,
-     *              and EVERY agent request would revert inside the gateway, long after passing
-     *              every policy gate.
+     *
+     *         NO GATEWAY APPROVAL. Up to v5 a third entry approved the gateway through the owner
+     *         door, because the gateway pulls the outbound amount with `transferFrom`. Since v6 the
+     *         wallet approves the gateway for exactly each outbound's amount and clears it after,
+     *         on every door, so the wallet needs no standing allowance.
      *
      * @param factory   The AGW factory proxy.
      * @param prc20     The PRC20 being bridged.
      * @param agwAddr   The wallet's predicted address.
-     * @param gatewayPC `UniversalGatewayPC`, the allowance's spender.
      * @param amount    How much to move into the wallet.
      * @param label     The wallet label recorded by the factory.
      */
@@ -143,24 +141,13 @@ library Identity {
         address factory,
         address prc20,
         address agwAddr,
-        address gatewayPC,
         uint256 amount,
         string memory label
     ) internal pure returns (Multicall[] memory calls) {
-        calls = new Multicall[](3);
+        calls = new Multicall[](2);
 
         calls[0] = Multicall({ to: factory, value: 0, data: abi.encodeWithSignature("deployWallet(string)", label) });
 
         calls[1] = Multicall({ to: prc20, value: 0, data: abi.encodeCall(IERC20.transfer, (agwAddr, amount)) });
-
-        calls[2] = Multicall({
-            to: agwAddr,
-            value: 0,
-            data: abi.encodeWithSignature(
-                "execute(bytes32,bytes)",
-                Requests.singleMode(),
-                ExecutionLib.encodeSingle(prc20, 0, abi.encodeCall(IERC20.approve, (gatewayPC, type(uint256).max)))
-            )
-        });
     }
 }

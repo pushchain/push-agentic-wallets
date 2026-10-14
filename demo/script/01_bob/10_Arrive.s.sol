@@ -74,9 +74,7 @@ contract Arrive is Script {
         if (bob.balance < NATIVE_VALUE) revert InsufficientETH(bob.balance, NATIVE_VALUE);
 
         // The wallet-setup payload. Inert on today's build; harmless if it becomes live.
-        Multicall[] memory calls = Identity.arrivalCalls(
-            factory, prc20, agw, AddressBook.donut("UniversalGatewayPC"), bridgeAmount, WALLET_LABEL
-        );
+        Multicall[] memory calls = Identity.arrivalCalls(factory, prc20, agw, bridgeAmount, WALLET_LABEL);
         UniversalPayload memory payload = BobPayload.multicallPayload(calls, 0, 0);
         bytes memory signature =
             BobPayload.signDigest(UeaDigest.hash(uea, SEPOLIA_CHAIN_ID, PUSH_CHAIN_ID, 0, payload), bobPk);

@@ -54,7 +54,7 @@ contract GrantPinnedApprove is Script {
         DemoLog.note(string.concat("      but ONLY naming ", vm.toString(stake)));
         DemoLog.blank();
         DemoLog.kv("Pinned argument", string.concat("spender, at offset ", vm.toString(uint256(r.cfg.pins[0].offset))));
-        DemoLog.kv("Must equal", vm.toString(r.cfg.pins[0].expected));
+        DemoLog.kv("Must equal", vm.toString(r.cfg.pins[0].value));
         DemoLog.blank();
         DemoLog.line(DemoLog.dim("Same wallet, same agent, same contract, same function, same caps."));
         DemoLog.line(DemoLog.dim("One field is different."));

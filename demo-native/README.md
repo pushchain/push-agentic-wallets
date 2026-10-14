@@ -6,8 +6,9 @@ A user on Push Chain funds a small wallet (an AGW), grants an agent a narrow wri
 and the agent does useful work with the user's money. The contracts, not the agent's honesty,
 guarantee it can do **only** what the rules say.
 
-**Status:** run end to end on Donut against the current (v5) contracts on 2026-10-10. Every act
-below was broadcast; every refusal printed the error this README names.
+**Status:** updated for the v6 contracts (2026-10-14); the v6 testnet run is pending. Earlier, every act
+below was broadcast on Donut against v5 on 2026-10-10, and every refusal printed the error this README
+names.
 
 > ⚠️ `DemoUSDC` and `StakeDummy` are demo fixtures and are unsafe by design: a freely mintable
 > token, and a staking contract with no owner, no pause and no supply accounting. **Never deploy
@@ -175,7 +176,7 @@ test/        NativeIds · NativeRules · StakeDummy
 state/       ledger.json (gitignored, per-run)
 ```
 
-Our own contract addresses are read from `deployments/address-book-v5/push_agw_contracts.json` and
+Our own contract addresses are read from `deployments/address-book-v6/push_agw_contracts.json` and
 are never copied into this folder.
 
 ---
