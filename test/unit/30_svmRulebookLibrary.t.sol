@@ -8,7 +8,14 @@ import { Vm } from "forge-std/Vm.sol";
 import { BaseTest } from "../Base.t.sol";
 import { SvmRulebook } from "../../src/policies/SvmRulebook.sol";
 import { IUniversalRulesPolicy } from "../../src/interfaces/IUniversalRulesPolicy.sol";
-import { AllowedProgram, SvmAccountPin, SvmConfig, SvmDataPin, SvmTerms } from "../../src/libraries/Types.sol";
+import {
+    AllowedProgram,
+    ANY_ACCOUNT_COUNT,
+    SvmAccountPin,
+    SvmConfig,
+    SvmDataPin,
+    SvmTerms
+} from "../../src/libraries/Types.sol";
 import { ConfigId } from "smartsessions/DataTypes.sol";
 import { MockPRC20 } from "../mocks/MockUniversalGateway.sol";
 
@@ -64,7 +71,7 @@ contract SvmRulebookLibraryTest is BaseTest {
     function _terms() internal view returns (SvmTerms memory t) {
         AllowedProgram[] memory r = new AllowedProgram[](1);
         r[0] = AllowedProgram({
-            program: PROG, discriminator: ROUTE, discriminatorLen: 8, dataless: false, maxAccounts: 0
+            program: PROG, discriminator: ROUTE, discriminatorLen: 8, dataless: false, maxAccounts: ANY_ACCOUNT_COUNT
         });
 
         SvmAccountPin[] memory p = new SvmAccountPin[](2);

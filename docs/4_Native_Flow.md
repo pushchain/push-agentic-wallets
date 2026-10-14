@@ -129,7 +129,7 @@ actions: [ ONE TO EIGHT — the NATIVE shape; five here ]
            pins             = [ { offset 4, expected = 0xbobagw } ]     ← the beneficiary, FORCED
            amount           = { on, offset 36, maxPerCall 50e6, maxTotal 60e6 }
            maxValuePerCall  = 0 · maxValueTotal = 0    ← stakeFor is not payable
-           maxCalls         = 0                        ← zero means UNLIMITED
+           maxCalls         = UNLIMITED_CALLS          ← type(uint32).max; 0 is refused at grant
 
   [1]  unstake()    — no pins, no amount, maxCalls = 2
   [2]  claim()      — no pins, no amount, no value, no limit: the strictest shape there is —
@@ -209,7 +209,7 @@ Layer 1  the execution payload  mode = single · executionCalldata = (0xpushstak
               │     N6 value ≤ per-call cap · value + valueSpent ≤ lifetime cap
               │     N7 every pin: calldata long enough · word at offset 4 == 0xbobagw, ALL 32 BYTES
               │     N8 amount at offset 36 ≤ 50e6 · amount + amountSpent ≤ 60e6
-              │     N9 callsUsed < maxCalls   (0 = unlimited)
+              │     N9 callsUsed < maxCalls   (UNLIMITED_CALLS = no limit)
               │     EFFECTS LAST: valueSpent · amountSpent += 40e6 · callsUsed += 1
               │                   emit NativeCallMetered(id, …, value 0, amount 40e6)
               │

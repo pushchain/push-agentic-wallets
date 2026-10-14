@@ -208,6 +208,21 @@ uint256 constant MAX_ASSETS = 8;
  */
 uint256 constant MAX_ALLOWED_CALL_PINS = 32;
 
+/// @dev `NativeTerms.maxCalls` value meaning "no call limit". Every other value is the lifetime call
+///      ceiling; 0 is refused at grant (`ZeroMaxCalls`) because a rule that can make no call
+///      authorises nothing. FILE-LEVEL so the SDK can see it.
+uint32 constant UNLIMITED_CALLS = type(uint32).max;
+
+/// @dev `AllowedProgram.maxAccounts` value meaning "any account count". 1..64 means the request must
+///      carry EXACTLY that many accounts; 0 and 65..254 are refused at grant
+///      (`SvmMaxAccountsOutOfRange`). FILE-LEVEL so the SDK can see it.
+uint8 constant ANY_ACCOUNT_COUNT = type(uint8).max;
+
+/// @dev Maximum rules one createWallet / createWalletWithSig may grant at deployment. Bounds the
+///      initialisation loop and one deployment's gas; more rules can be added later with grantRules.
+///      FILE-LEVEL so the SDK can see it.
+uint256 constant MAX_INITIAL_RULES = 8;
+
 /**
  * @dev Longest wallet label, in BYTES (not characters). `AGW.setLabel` and the deploy path refuse a
  *      longer one, so every `label()` read is bounded. FILE-LEVEL so the SDK can see it.
@@ -420,7 +435,8 @@ struct AmountRule {
  * @param valueSpent       lifetime native value metered, written effects-last
  * @param amount           optional calldata-amount metering
  * @param amountSpent      lifetime metered amount, written effects-last
- * @param maxCalls         0 = unlimited; otherwise the lifetime call ceiling
+ * @param maxCalls         lifetime call ceiling; `UNLIMITED_CALLS` (`type(uint32).max`) = no limit;
+ *                         0 is refused at grant
  * @param callsUsed        calls consumed. ALWAYS increments on a successful check, including a
  *                         zero-value zero-amount call — a call is a use, and the alternative
  *                         makes `maxCalls` bypassable
@@ -450,6 +466,9 @@ struct NativeConfig {
  *         SPLIT EVEN THOUGH ONLY THE UNIVERSAL SIDE FORCES IT. The SDK builds both; one struct
  *         with dead input fields sitting beside one without is precisely the inconsistency that
  *         let a since-removed chain field acquire four different conventions in one repository.
+ *
+ * @param  maxCalls  lifetime call ceiling; `UNLIMITED_CALLS` (`type(uint32).max`) = no limit; 0 is
+ *                   refused at grant
  */
 struct NativeTerms {
     uint48 validUntil;
@@ -480,9 +499,10 @@ struct NativeTerms {
  * @param dataless          The instruction carries NO data. The only way to get a length-0 tag,
  *                          and it forces `ix_data` to be EMPTY at check time — so a rule can never
  *                          match an instruction its pins were not written for.
- * @param maxAccounts       0 = unbounded; otherwise the request's account count must EQUAL it.
- *                          Set to the IDL count for fixed-layout instructions so nothing can be
- *                          appended behind the pinned positions.
+ * @param maxAccounts       `ANY_ACCOUNT_COUNT` (255) = any count; 1..64 = the request's account
+ *                          count must EQUAL it; 0 and 65..254 are refused at grant. Set it to the
+ *                          IDL count for fixed-layout instructions so nothing can be appended
+ *                          behind the pinned positions.
  */
 struct AllowedProgram {
     bytes32 program;

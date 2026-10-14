@@ -13,7 +13,8 @@ import {
     MAX_PINS,
     Multicall,
     NativeConfig,
-    PinOp
+    PinOp,
+    UNLIMITED_CALLS
 } from "../../src/libraries/Types.sol";
 import { ConfigId } from "smartsessions/DataTypes.sol";
 import { MockPRC20 } from "../mocks/MockUniversalGateway.sol";
@@ -622,7 +623,7 @@ contract EvmPinsTest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: false, offset: 0, maxPerCall: 0, maxTotal: 0 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: pins
         });

@@ -10,6 +10,7 @@ import { IUniversalRulesPolicy } from "../interfaces/IUniversalRulesPolicy.sol";
 import { RulesLib } from "../libraries/RulesLib.sol";
 import {
     AllowedProgram,
+    ANY_ACCOUNT_COUNT,
     AssetCapState,
     MIN_OUTBOUND_BODY_LEN,
     SEND_OUTBOUND_SELECTOR,
@@ -161,7 +162,8 @@ library SvmRulebook {
     /**
      * @dev Allow-list rule guards: tag shape, forbidden programs, and pairwise exactness.
      *      - A rule is `dataless` XOR has a 1..8-byte tag.
-     *      - A fixed account count, if set, is within the S13 bound.
+     *      - `maxAccounts` is `ANY_ACCOUNT_COUNT` (any count) or an exact count of 1..MAX_SVM_ACCOUNTS;
+     *        0 and anything above the S13 bound are refused.
      *      - A program the check path forbids as a target is refused here too; S15 is then defence
      *        in depth against state this guard makes unreachable.
      *      - Two rules on one program must not both match one request, or first-match makes the
@@ -173,9 +175,11 @@ library SvmRulebook {
             AllowedProgram memory r = t.programs[i];
             bool badLen = r.dataless ? r.discriminatorLen != 0 : (r.discriminatorLen == 0 || r.discriminatorLen > 8);
             if (badLen) revert UniversalRulesPolicyErrors.DiscriminatorLenOutOfRange(i, r.discriminatorLen);
-            // A fixed count above the S13 loop bound can never be met: every request would fail
-            // S13 or S16. Refused here so the owner never grants a rule that is dead on arrival.
-            if (r.maxAccounts > MAX_SVM_ACCOUNTS) {
+            // Z-2: ANY_ACCOUNT_COUNT = any count; 1..MAX_SVM_ACCOUNTS = exact count; 0 and 65..254 refused.
+            // 0 is "nothing": a rule that must carry zero accounts can own no account pin (every rule must),
+            // and is refused here, named, instead of failing later as a confusing pin-index error.
+            // A count above the S13 loop bound can never be met: every request would fail S13 or S16.
+            if (r.maxAccounts != ANY_ACCOUNT_COUNT && (r.maxAccounts == 0 || r.maxAccounts > MAX_SVM_ACCOUNTS)) {
                 revert UniversalRulesPolicyErrors.SvmMaxAccountsOutOfRange(i, r.maxAccounts);
             }
             if (_isForbiddenProgram(r.program, t.gatewayProgram, t.expectedCEA)) {
@@ -206,8 +210,8 @@ library SvmRulebook {
 
     /**
      * @dev Pin shape guards, both kinds.
-     *      - Account pins: rule in range; index below the loop bound and, when the rule fixes its
-     *        account count, below that too. Every rule must own at least one — HYGIENE: an
+     *      - Account pins: rule in range; index below the loop bound and, unless the rule is
+     *        `ANY_ACCOUNT_COUNT`, below its exact account count too. Every rule must own at least one — HYGIENE: an
      *        authority-only pin always passes, and which positions must be pinned is the compiler's
      *        responsibility, not this contract's.
      *        One pin per (rule, index).
@@ -225,7 +229,7 @@ library SvmRulebook {
             SvmAccountPin memory pin = t.pins[i];
             if (pin.ruleIndex >= ruleCount) revert UniversalRulesPolicyErrors.SvmPinRuleOutOfRange(i, pin.ruleIndex);
             uint8 cap = t.programs[pin.ruleIndex].maxAccounts;
-            if (pin.accountIndex >= MAX_SVM_ACCOUNTS || (cap != 0 && pin.accountIndex >= cap)) {
+            if (pin.accountIndex >= MAX_SVM_ACCOUNTS || (cap != ANY_ACCOUNT_COUNT && pin.accountIndex >= cap)) {
                 revert UniversalRulesPolicyErrors.SvmPinIndexOutOfRange(i, pin.accountIndex);
             }
             // One position, one pin. Two pins on a (rule, index) are either redundant or
@@ -547,7 +551,8 @@ library SvmRulebook {
      * @dev S16 — first rule whose program equals the target and whose tag matches: a dataless rule
      *      matches only empty ix_data; a tagged rule needs at least `discriminatorLen` bytes and a
      *      prefix-equal tag. Init guarantees at most one rule can match, so first-match is exact.
-     *      Then the rule's fixed account count, if any.
+     *      Then the rule's account count: unless it is `ANY_ACCOUNT_COUNT`, the request must carry
+     *      exactly that many accounts.
      */
     function _matchSvmRule(SvmConfig storage cfg, bytes memory p, SvmPayloadView memory v)
         private
@@ -559,7 +564,7 @@ library SvmRulebook {
             AllowedProgram storage r = cfg.programs[i];
             if (r.program == v.target && _tagMatches(r, p, v)) {
                 uint8 cap = r.maxAccounts;
-                if (cap != 0 && v.count != cap) {
+                if (cap != ANY_ACCOUNT_COUNT && v.count != cap) {
                     revert UniversalRulesPolicyErrors.SvmAccountCountMismatch(v.count, cap);
                 }
                 return i;

@@ -17,7 +17,8 @@ import {
     NativeConfig,
     OWNER_LANE_FLAG,
     OwnerIntent,
-    RulesType
+    RulesType,
+    UNLIMITED_CALLS
 } from "../../src/libraries/Types.sol";
 import { ModeLib, ModeCode } from "../../src/libraries/ModeLib.sol";
 import { ExecutionLib, Execution } from "../../src/libraries/ExecutionLib.sol";
@@ -154,7 +155,7 @@ contract CheckpointsTest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: false, offset: 0, maxPerCall: 0, maxTotal: 0 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: new ArgPin[](0)
         });

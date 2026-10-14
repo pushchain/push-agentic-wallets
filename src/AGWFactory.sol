@@ -5,6 +5,8 @@ import { AGWFactoryErrors } from "./libraries/Errors.sol";
 
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 
+import { Session } from "smartsessions/DataTypes.sol";
+
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {
     AccessControlDefaultAdminRulesUpgradeable
@@ -14,7 +16,7 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 
 import { IAGWFactory } from "./interfaces/IAGWFactory.sol";
 import { IAGWInit } from "./interfaces/IAGWInit.sol";
-import { OwnerIntent } from "./libraries/Types.sol";
+import { OwnerIntent, MAX_INITIAL_RULES } from "./libraries/Types.sol";
 import { OwnerAuthLib } from "./libraries/OwnerAuthLib.sol";
 
 /**
@@ -138,7 +140,7 @@ contract AGWFactory is
         if (implementation == address(0)) revert AGWFactoryErrors.ImplementationNotSet();
 
         address owner = msg.sender;
-        wallet = _deploy(implementation, owner, _walletCount[owner], label);
+        (wallet,) = _deploy(implementation, owner, _walletCount[owner], label, new Session[](0));
     }
 
     /**
@@ -189,7 +191,100 @@ contract AGWFactory is
             }
         }
 
-        wallet = _deploy(implementation, owner, index, label);
+        (wallet,) = _deploy(implementation, owner, index, label, new Session[](0));
+    }
+
+    /**
+     * @notice Deploys the caller's next agent wallet and grants it `rules`, atomically.
+     *
+     * @dev    - The caller is the owner, exactly as in `deployWallet`; the deploy is `deployWallet`'s, at
+     *           index `walletCount(caller)` and the address `predictWallet` reports for it.
+     *         - Reverts while paused, with `ImplementationNotSet` on an uninitialised proxy, and with
+     *           `TooManyInitialRules` above `MAX_INITIAL_RULES`, before anything is deployed.
+     *         - The wallet grants each rule in order inside `initializeAccount`, through the same internal
+     *           path as `grantRules`: same shape checks, same URP init, same salt from its grant nonce, same
+     *           events. Any refused rule reverts the whole call, so either the wallet exists with every
+     *           rule or nothing happened.
+     *         - `rules` may be empty; the call is then exactly `deployWallet`.
+     *
+     * @param  label     Free-form label, emitted, and stored on the wallet (`AGW.label`).
+     * @param  rules     The initial rules, granted in order. At most `MAX_INITIAL_RULES`.
+     * @return wallet    The deployed wallet.
+     * @return rulesIds  `rulesIds[i]` is the id `grantRules(rules[i])` would have returned at grant nonce `i`.
+     */
+    function createWallet(string calldata label, Session[] calldata rules)
+        external
+        whenNotPaused
+        returns (address wallet, bytes32[] memory rulesIds)
+    {
+        address implementation = _walletImplementation;
+        if (implementation == address(0)) revert AGWFactoryErrors.ImplementationNotSet();
+        if (rules.length > MAX_INITIAL_RULES) revert AGWFactoryErrors.TooManyInitialRules(rules.length);
+
+        address owner = msg.sender;
+        (wallet, rulesIds) = _deploy(implementation, owner, _walletCount[owner], label, rules);
+    }
+
+    /**
+     * @notice `createWallet` for `intent.owner`, on the owner's signature.
+     *
+     * @dev    - The deploy checks are `deployWalletWithSig`'s, in the same order: implementation, rules
+     *           count, zero owner, index, predicted wallet.
+     *         - `msg.sender == intent.owner` needs no signature, and the rules checks below do not apply:
+     *           they bind a signature, and the owner calling directly is already authorised.
+     *         - Any other caller must be `intent.executor` (non-zero), before the deadline, and the intent
+     *           must commit to the exact rules: `intent.sessionHash == keccak256(abi.encode(rules))` (the
+     *           whole array, so every byte, the order and the count are bound) and `intent.grantNonce == 0`
+     *           (a fresh wallet's grant nonce). The signature is checked last, cheap checks first.
+     *         - The array hash and the zero grant nonce keep this intent from being reused at the wallet's
+     *           `grantRulesWithSig`, which hashes a single `Session` at the wallet's current nonce.
+     *         - Known and accepted: `deployWalletWithSig` ignores `sessionHash`, so the executor could
+     *           present this intent there and deploy the wallet without its rules; this call then fails
+     *           `IndexMismatch`. The owner can grant into that wallet later.
+     *         - `OwnerIntent`, its typehash and the EIP-712 domain are unchanged; the exec fields are ignored.
+     *
+     * @param  intent    The owner's intent. Only `owner`, `wallet`, `executor`, `index`, `deadline`,
+     *                   `sessionHash`, `grantNonce` and `signerChainId` are read here.
+     * @param  sig       The owner's signature over `intent`; ignored when the caller is the owner.
+     * @param  label     Free-form label, emitted, and stored on the wallet (`AGW.label`). Not signed.
+     * @param  rules     The initial rules, granted in order. At most `MAX_INITIAL_RULES`.
+     * @return wallet    The deployed wallet.
+     * @return rulesIds  The engine's id for each granted rule, in input order.
+     */
+    function createWalletWithSig(
+        OwnerIntent calldata intent,
+        bytes calldata sig,
+        string calldata label,
+        Session[] calldata rules
+    ) external whenNotPaused returns (address wallet, bytes32[] memory rulesIds) {
+        address implementation = _walletImplementation;
+        if (implementation == address(0)) revert AGWFactoryErrors.ImplementationNotSet();
+        if (rules.length > MAX_INITIAL_RULES) revert AGWFactoryErrors.TooManyInitialRules(rules.length);
+
+        address owner = intent.owner;
+        if (owner == address(0)) revert AGWFactoryErrors.ZeroAddress();
+
+        uint96 index = intent.index;
+        uint96 next = _walletCount[owner];
+        if (index != next) revert AGWFactoryErrors.IndexMismatch(next, index);
+
+        address predicted = _predict(implementation, owner, index);
+        if (intent.wallet != predicted) revert AGWFactoryErrors.IntentWalletMismatch(predicted, intent.wallet);
+
+        if (msg.sender != owner) {
+            if (intent.executor == address(0) || msg.sender != intent.executor) {
+                revert AGWFactoryErrors.ExecutorMismatch(intent.executor, msg.sender);
+            }
+            if (block.timestamp > intent.deadline) revert AGWFactoryErrors.SignatureExpired(intent.deadline);
+            bytes32 rulesHash = keccak256(abi.encode(rules));
+            if (intent.sessionHash != rulesHash) revert AGWFactoryErrors.IntentRulesMismatch(rulesHash);
+            if (intent.grantNonce != 0) revert AGWFactoryErrors.IntentGrantNonceNotZero(intent.grantNonce);
+            if (!OwnerAuthLib.isOwnerSig(owner, OwnerAuthLib.intentDigest(address(this), intent), sig)) {
+                revert AGWFactoryErrors.InvalidOwnerSignature();
+            }
+        }
+
+        (wallet, rulesIds) = _deploy(implementation, owner, index, label, rules);
     }
 
     /// @inheritdoc IAGWFactory
@@ -198,17 +293,20 @@ contract AGWFactory is
     }
 
     /**
-     * @dev The deployment tail shared by `deployWallet` and `deployWalletWithSig`. BYTE-FOR-BYTE the logic the
+     * @dev The deployment tail shared by all four deploy functions. BYTE-FOR-BYTE the logic the
      *      single-argument form always had: count advance → salt → args → clone → record →
      *      initializeAccount → event. Every caller has run all of its checks before calling this.
      *
      *      - The count advances and the record is written before the single external call, which is
      *        what makes a reentrant deploy unable to reuse an index.
      *      - Salt and args are frozen forever: counterfactual funding relies on them.
+     *      - `rules` is passed to the wallet's initialisation, which grants each one in order.
+     *        `deployWallet` and `deployWalletWithSig` always pass an empty array; only the
+     *        owner-authorised `createWallet*` pass rules. `memory`, so the empty array can be built here.
      */
-    function _deploy(address implementation, address owner, uint96 index, string calldata label)
+    function _deploy(address implementation, address owner, uint96 index, string calldata label, Session[] memory rules)
         internal
-        returns (address wallet)
+        returns (address wallet, bytes32[] memory rulesIds)
     {
         _walletCount[owner] = index + 1;
 
@@ -220,7 +318,7 @@ contract AGWFactory is
 
         _records[wallet] = WalletRecord({ owner: owner, index: index });
 
-        IAGWInit(wallet).initializeAccount(label);
+        rulesIds = IAGWInit(wallet).initializeAccount(label, rules);
 
         emit WalletDeployed(owner, index, wallet, label);
     }
@@ -316,7 +414,8 @@ contract AGWFactory is
 
     /**
      * @notice Pauses wallet deployment.
-     * @dev    - Gates `deployWallet` only. Views are never gated, and deployed wallets are
+     * @dev    - Gates `deployWallet`, `deployWalletWithSig`, `createWallet` and `createWalletWithSig` only.
+     *           Views are never gated, and deployed wallets are
      *           unaffected, since the factory has no reach into them.
      *         - While paused, a user who funded a predicted address cannot deploy it. Availability
      *           only; funds are never lost.

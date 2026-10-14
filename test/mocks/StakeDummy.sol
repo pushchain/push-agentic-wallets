@@ -17,7 +17,7 @@ import { MockERC20 } from "./MockERC20.sol";
  *         - `unstake()` — four bytes of selector and no arguments. NOT the value-only shape: it
  *           still carries a selector, so it binds to a normal selector action. This is the
  *           distinction that makes `VALUE_SELECTOR` mean *empty calldata* and nothing else.
- *         - `claim()` — the ascetic shape: no value cap, no amount rule, no pins, `maxCalls == 0`.
+ *         - `claim()` — the ascetic shape: no value cap, no amount rule, no pins, `maxCalls == UNLIMITED_CALLS`.
  *         - `receive()` — the TRUE value-only path: empty calldata, so the engine derives
  *           `VALUE_SELECTOR` and URP matches a `0xFFFFFFFF` config.
  *
