@@ -19,6 +19,8 @@ import { ExecutionLib } from "../../src/libraries/ExecutionLib.sol";
 
 import { OwnerIntent } from "../../src/libraries/Types.sol";
 
+import { Session } from "smartsessions/DataTypes.sol";
+
 import { OwnerAuthLib } from "../../src/libraries/OwnerAuthLib.sol";
 
 import { MockUEA } from "../mocks/MockUEA.sol";
@@ -429,12 +431,15 @@ contract AGWFactoryTest is BaseTest {
      * one under any name.
      */
     function test_T09_NoImplementationSetter_ABI() public view {
-        string[36] memory sigs = [
+        string[38] memory sigs = [
             // ours
             "initialize(address,address)",
             "deployWallet(string)",
             // UniversalMarketplace PRD, Change B: the owner-intent deploy and its domain view.
             "deployWalletWithSig((address,address,address,uint96,bytes32,bytes32,bytes32,uint192,uint64,uint64,uint48,uint256),bytes,string)",
+            // AGW_CREATE_WALLET PRD: deploy and grant in one call, unsigned and signed.
+            "createWallet(string,(address,bytes,bytes32,(address,bytes)[],((bytes32,string[])[],(address,bytes)[]),(bytes4,address,(address,bytes)[])[],bool)[])",
+            "createWalletWithSig((address,address,address,uint96,bytes32,bytes32,bytes32,uint192,uint64,uint64,uint48,uint256),bytes,string,(address,bytes,bytes32,(address,bytes)[],((bytes32,string[])[],(address,bytes)[]),(bytes4,address,(address,bytes)[])[],bool)[])",
             "domainSeparator(uint256)",
             "predictWallet(address,uint256)",
             "walletCount(address)",
@@ -793,9 +798,9 @@ contract ReenteringWallet {
         LATCH = latch;
     }
 
-    function initializeAccount(string calldata) external {
+    function initializeAccount(string calldata, Session[] calldata) external returns (bytes32[] memory rulesIds) {
         // `msg.sender` here IS the factory. Re-enter exactly once, globally.
-        if (!ReenteringWallet(payable(address(this))).LATCH().tryFire()) return;
+        if (!ReenteringWallet(payable(address(this))).LATCH().tryFire()) return rulesIds;
         spawned = AGWFactory(msg.sender).deployWallet("reentrant");
     }
 
@@ -821,7 +826,7 @@ contract ReenteringOwner {
 contract RevertingInitWallet {
     error InitRejected();
 
-    function initializeAccount(string calldata) external pure {
+    function initializeAccount(string calldata, Session[] calldata) external pure returns (bytes32[] memory) {
         revert InitRejected();
     }
 }

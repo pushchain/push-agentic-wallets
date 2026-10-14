@@ -13,7 +13,7 @@ import {
     STAKE_PROGRAM,
     BPF_LOADER_UPGRADEABLE,
     ADDRESS_LOOKUP_TABLE
-} from "../../src/policies/UniversalRulesPolicy.sol";
+} from "../../src/policies/SvmRulebook.sol";
 import { IUniversalRulesPolicy } from "../../src/interfaces/IUniversalRulesPolicy.sol";
 import { PushChainLib } from "../../src/libraries/PushChainLib.sol";
 import { AGW } from "../../src/AGW.sol";
@@ -22,6 +22,7 @@ import { ExecutionLib } from "../../src/libraries/ExecutionLib.sol";
 import {
     AllowedCall,
     AllowedProgram,
+    ANY_ACCOUNT_COUNT,
     AssetCap,
     AmountRule,
     ArgPin,
@@ -34,6 +35,7 @@ import {
     SvmDataPin,
     SvmDataPinMode,
     SvmTerms,
+    UNLIMITED_CALLS,
     VmFamily
 } from "../../src/libraries/Types.sol";
 import { ConfigId, Session } from "smartsessions/DataTypes.sol";
@@ -118,7 +120,11 @@ contract URPSvmTest is BaseTest {
 
     function _routeRule() internal pure returns (AllowedProgram memory) {
         return AllowedProgram({
-            program: bytes32(0), discriminator: ROUTE, discriminatorLen: 8, dataless: false, maxAccounts: 0
+            program: bytes32(0),
+            discriminator: ROUTE,
+            discriminatorLen: 8,
+            dataless: false,
+            maxAccounts: ANY_ACCOUNT_COUNT
         });
     }
 
@@ -521,7 +527,12 @@ contract URPSvmTest is BaseTest {
         MockPRC20 sepoliaAsset = new MockPRC20();
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: makeAddr("router"), selector: 0x12345678, beneficiaryOffset: 36, hasBeneficiary: false, maxValue: 0
+            target: makeAddr("router"),
+            selector: 0x12345678,
+            beneficiaryOffset: 36,
+            hasBeneficiary: false,
+            maxValue: 0,
+            pins: noPins()
         });
         Config memory cfg = Config({
             initialized: false,
@@ -742,7 +753,9 @@ contract URPSvmTest is BaseTest {
 
         // Two dataless rules on one program.
         SvmTerms memory t = _twoRules(
-            AllowedProgram({ program: PROG, discriminator: 0, discriminatorLen: 0, dataless: true, maxAccounts: 0 })
+            AllowedProgram({
+                program: PROG, discriminator: 0, discriminatorLen: 0, dataless: true, maxAccounts: ANY_ACCOUNT_COUNT
+            })
         );
         t.programs[0].discriminator = 0;
         t.programs[0].discriminatorLen = 0;
@@ -772,7 +785,9 @@ contract URPSvmTest is BaseTest {
 
     function test_svmInit_datalessBesideTaggedIsNotAmbiguous() public {
         SvmTerms memory t = _twoRules(
-            AllowedProgram({ program: PROG, discriminator: 0, discriminatorLen: 0, dataless: true, maxAccounts: 0 })
+            AllowedProgram({
+                program: PROG, discriminator: 0, discriminatorLen: 0, dataless: true, maxAccounts: ANY_ACCOUNT_COUNT
+            })
         );
         _init(t);
         assertEq(urp.getSvmConfig(CID, ACCOUNT).programs.length, 2);
@@ -1628,7 +1643,7 @@ contract URPSvmTest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: false, offset: 0, maxPerCall: 0, maxTotal: 0 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: pins
         });

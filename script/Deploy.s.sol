@@ -11,6 +11,7 @@ import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/trans
 import { SmartSession } from "smartsessions/SmartSession.sol";
 import { AgentValidator } from "../src/validators/AgentValidator.sol";
 import { UniversalRulesPolicy } from "../src/policies/UniversalRulesPolicy.sol";
+import { SvmRulebook } from "../src/policies/SvmRulebook.sol";
 import { AGW } from "../src/AGW.sol";
 import { AGWFactory } from "../src/AGWFactory.sol";
 
@@ -34,6 +35,13 @@ import { AGWFactory } from "../src/AGWFactory.sol";
  *
  * @dev    `SmartSessionCompatibilityFallback` is NOT deployed. Nothing in v3 uses it; the wallet
  *         refuses module type 3 entirely.
+ *
+ * @dev    SIX CONTRACTS ARE DEPLOYED, NOT FIVE: `SvmRulebook`, the linked external library holding
+ *         the Solana rulebook, is deployed FIRST and automatically by forge, because URP's bytecode
+ *         embeds its address. There is no `new SvmRulebook()` line to write and there must not be —
+ *         forge links it. It is recorded as `svmRulebook` so the URP implementation can be verified
+ *         later with `--libraries src/policies/SvmRulebook.sol:SvmRulebook:<address>`, which is not
+ *         reconstructible after the fact.
  *
  * Usage:
  *   forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
@@ -169,6 +177,12 @@ contract Deploy is Script {
         vm.serializeAddress(obj, "urpImplementation", _urpImplementation);
         vm.serializeAddress(obj, "urpProxyAdmin", _urpProxyAdmin);
 
+        // The linked Solana rulebook library. `address(SvmRulebook)` is how Solidity exposes the
+        // address forge linked into URP's bytecode — RECORD IT: verifying the URP implementation
+        // needs `--libraries …:SvmRulebook:<this>`, and it cannot be recovered from the chain
+        // afterwards without disassembling URP.
+        vm.serializeAddress(obj, "svmRulebook", address(SvmRulebook));
+
         vm.serializeUint(obj, "chainId", chainId);
         vm.serializeString(obj, "commit", _repoCommit());
         vm.serializeString(obj, "engineForkCommit", ENGINE_FORK_COMMIT);
@@ -188,6 +202,7 @@ contract Deploy is Script {
         console2.log("  factoryProxy (PERMANENT, user-facing)", factoryProxy);
         console2.log("  urp          (PERMANENT, pinned by every wallet)", urp);
         console2.log("  urpProxyAdmin (KEEP THIS - no upgrade is possible without it)", _urpProxyAdmin);
+        console2.log("  svmRulebook  (linked library - needed to VERIFY urpImplementation)", address(SvmRulebook));
     }
 
     /**

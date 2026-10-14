@@ -119,4 +119,18 @@ contract MockPRC20 {
         emit Approval(msg.sender, spender, amount);
         return true;
     }
+
+    error InsufficientAllowance();
+
+    /// @dev The standard pull, for `PullingGatewayMock`: always decrements the allowance (no
+    ///      infinite-allowance shortcut), so a test can see exactly what the spender was granted.
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        if (allowance[from][msg.sender] < amount) revert InsufficientAllowance();
+        if (balanceOf[from] < amount) revert InsufficientBalance();
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+        return true;
+    }
 }

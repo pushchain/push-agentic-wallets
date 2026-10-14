@@ -127,9 +127,14 @@ interface IAGW {
     /// @notice Revokes every rules set on this wallet. Owner or the wallet itself.
     function revokeAllRules() external;
 
-    /// @notice Factory-only, once: stores the deploy-time label (if any) and installs the session
-    ///         engine as the account's sole validator.
-    function initializeAccount(string calldata label) external;
+    /// @notice Factory-only, once: stores the deploy-time label (if any), installs the session engine
+    ///         as the account's sole validator, then grants the owner-authorised initial rules (if any)
+    ///         through the same path `grantRules` uses. One call; the factory passes the deploy-time
+    ///         label and the owner-authorised initial rules.
+    /// @return rulesIds  The engine's id for each granted rule, in input order.
+    function initializeAccount(string calldata label, Session[] calldata rules)
+        external
+        returns (bytes32[] memory rulesIds);
 
     /// @notice Installs a validator module. Owner only.
     function installModule(uint256 moduleTypeId, address module, bytes calldata initData) external;

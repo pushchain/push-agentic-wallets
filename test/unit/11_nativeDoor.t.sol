@@ -20,7 +20,9 @@ import {
     ArgPin,
     ENGINE_FALLBACK_TARGET,
     NativeConfig,
+    PinOp,
     RulesType,
+    UNLIMITED_CALLS,
     VALUE_SELECTOR
 } from "../../src/libraries/Types.sol";
 
@@ -99,7 +101,7 @@ contract PushAgentWalletNativeDoorTest is BaseTest {
 
     function _pin(address who) internal pure returns (ArgPin[] memory p) {
         p = new ArgPin[](1);
-        p[0] = ArgPin({ offset: BENEFICIARY_OFFSET, expected: bytes32(uint256(uint160(who))) });
+        p[0] = ArgPin({ offset: BENEFICIARY_OFFSET, op: PinOp.EQ, value: bytes32(uint256(uint160(who))) });
     }
 
     function _noPins() internal pure returns (ArgPin[] memory) {
@@ -122,7 +124,7 @@ contract PushAgentWalletNativeDoorTest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: true, offset: AMOUNT_OFFSET, maxPerCall: 50e6, maxTotal: 60e6 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: _pin(address(wallet))
         });
@@ -142,7 +144,7 @@ contract PushAgentWalletNativeDoorTest is BaseTest {
         c = _stakeConfig();
         c.selector = CLAIM;
         c.amount = _noAmount();
-        c.maxCalls = 0;
+        c.maxCalls = UNLIMITED_CALLS;
         c.pins = _noPins();
     }
 

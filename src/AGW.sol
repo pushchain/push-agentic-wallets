@@ -85,6 +85,13 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      */
     uint256 internal constant MAX_NATIVE_ACTIONS = 8;
 
+    /// @dev `bytes4(keccak256("approve(address,uint256)"))`. Called raw, never through a typed
+    ///      interface, so no `extcodesize` check or return-data decode can revert.
+    bytes4 private constant IERC20_APPROVE_SELECTOR = 0x095ea7b3;
+
+    /// @dev `bytes4(keccak256("allowance(address,address)"))`. Staticcalled raw, for the same reason.
+    bytes4 private constant IERC20_ALLOWANCE_SELECTOR = 0xdd62ed3e;
+
     // The four wiring addresses, read through their UPPER_CASE() auto-getters. Resolved from the
     // implementation's runtime bytecode, so every clone reads them correctly through delegatecall.
 
@@ -230,13 +237,20 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      *         - Sets the latch, marks the engine installed, then calls `onInstall("")` with full gas
      *           and bubbles any revert, so the factory's deploy transaction unwinds atomically.
      *         - Emits `ModuleInstalled`, then `AccountInitialized`.
-     *         - Session data is never passed here; grants travel only through `grantRules`.
+     *         - Initial rules, if any, are granted here through `_grantRules`, the same path `grantRules`
+     *           uses, only during this one-shot, factory-only call. Every later grant goes through
+     *           `grantRules` / `grantRulesWithSig`.
      *         - Stores `label_` when it is non-empty; an empty label costs no write and reads as the
      *           default. An over-long label reverts `LabelTooLong` and unwinds the whole deploy.
      *
-     * @param  label_  The deploy-time label; empty for the default `AGW <index + 1>`.
+     * @param  label_    The deploy-time label; empty for the default `AGW <index + 1>`.
+     * @param  rules     The owner-authorised initial rules, granted in order; empty for none.
+     * @return rulesIds  The engine's id for each granted rule, in input order.
      */
-    function initializeAccount(string calldata label_) external {
+    function initializeAccount(string calldata label_, Session[] calldata rules)
+        external
+        returns (bytes32[] memory rulesIds)
+    {
         if (msg.sender != _factory()) revert AGWErrors.CallerIsNotFactory();
         if (_initialized) revert AGWErrors.AlreadyInitialized();
 
@@ -248,6 +262,16 @@ contract AGW is IAGW, ReentrancyGuardTransient {
 
         emit ModuleInstalled(MODULE_TYPE_VALIDATOR, SESSION_ENGINE);
         emit AccountInitialized(_owner(), SESSION_ENGINE);
+
+        // LAST: `_grantRules` calls the engine's `enableSessions`, which needs the engine installed.
+        uint256 n = rules.length;
+        rulesIds = new bytes32[](n);
+        for (uint256 i; i < n;) {
+            rulesIds[i] = _grantRules(rules[i]);
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /**
@@ -304,17 +328,118 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      * @dev Plain call, bubbling the callee's revert data verbatim. Shared by both doors so the agent
      *      path executes the exact validated bytes.
      *
+     *      GATEWAY AUTO-APPROVE (§6.1). When the call is `UNIVERSAL_GATEWAY_PC.sendUniversalTxOutbound`
+     *      and the request parses, the wallet wraps it, on every door alike (`execute`,
+     *      `executeWithSig`, `executeAsAgent`):
+     *        1. approves `req.token` to the gateway for exactly `req.amount` (skipped when the amount
+     *           is zero), because the gateway pulls exactly that amount, from `msg.sender`;
+     *        2. makes the call, unchanged;
+     *        3. leaves the wallet's allowance to the gateway for `req.token` at 0.
+     *      - NONE OF IT CAN REVERT. The owner door must succeed wherever it succeeded before (W-01):
+     *        the parser only slices calldata within proven bounds and treats anything malformed as
+     *        "not an outbound", and the approve and the clear are raw calls whose result is ignored
+     *        and whose return data is never copied. The gateway stays the judge: it pulls, or it
+     *        reverts, and a revert unwinds the approve with everything else.
+     *      - A standing allowance does not survive: after any parseable outbound the allowance for
+     *        that token is 0, including a zero-amount one, so an allowance the owner set deliberately
+     *        is cleared by the next outbound in that token. Nobody needs to approve the gateway.
+     *      - Skipped for a token of `address(0)`, the wallet, `SESSION_ENGINE` or the gateway itself;
+     *        none is a real PRC20. The call is still forwarded.
+     *      - On the agent door this runs after URP has accepted the request, so only a listed token
+     *        within its caps is ever approved. No checkpoint, event, error or storage is added.
+     *
      * @param target    Address to call.
      * @param value     Native PC to send with the call.
      * @param callData  Calldata to pass, forwarded unchanged.
      */
     function _execute(address target, uint256 value, bytes calldata callData) internal {
+        (address token, uint256 amount) = _parseOutbound(target, callData);
+        if (token != address(0) && amount != 0) _tryApprove(token, amount);
+
         (bool ok, bytes memory ret) = target.call{ value: value }(callData);
         if (!ok) {
             assembly {
                 revert(add(ret, 0x20), mload(ret))
             }
         }
+
+        if (token != address(0)) _clearGatewayAllowance(token);
+    }
+
+    /**
+     * @dev Reads `(req.token, req.amount)` out of a gateway outbound by calldata slicing alone.
+     *      Never reverts: every bound is proven before the slice that relies on it, and any failed
+     *      condition returns `token == address(0)`, meaning "not a parseable outbound".
+     *
+     *      Layout: selector (4) · offset word O (relative to byte 4) · at `4 + O` the struct head:
+     *      `recipient` offset, `token`, `amount`, … The offset word is followed, not assumed, so the
+     *      result equals what the gateway's (and URP's) `abi.decode` reads from the same bytes.
+     *
+     * @param  target    The call's target.
+     * @param  callData  The call's calldata.
+     * @return token     The request's token, or `address(0)` when not a parseable outbound.
+     * @return amount    The request's amount; meaningful only when `token` is non-zero.
+     */
+    function _parseOutbound(address target, bytes calldata callData)
+        private
+        view
+        returns (address token, uint256 amount)
+    {
+        if (target != UNIVERSAL_GATEWAY_PC) return (address(0), 0);
+        uint256 len = callData.length;
+        if (len < 36 || bytes4(callData[0:4]) != SEND_OUTBOUND_SELECTOR) return (address(0), 0);
+
+        // `offset <= len` rejects a huge offset before any addition, so nothing below can overflow.
+        uint256 offset = uint256(bytes32(callData[4:36]));
+        if (offset > len) return (address(0), 0);
+        uint256 start = 4 + offset;
+        if (start + 96 > len) return (address(0), 0);
+
+        uint256 word = uint256(bytes32(callData[start + 32:start + 64]));
+        if (word >> 160 != 0) return (address(0), 0);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        token = address(uint160(word)); // lossless: the high 96 bits were just proven zero
+        if (token == address(this) || token == SESSION_ENGINE || token == UNIVERSAL_GATEWAY_PC) {
+            return (address(0), 0);
+        }
+        amount = uint256(bytes32(callData[start + 64:start + 96]));
+    }
+
+    /**
+     * @dev `token.approve(UNIVERSAL_GATEWAY_PC, amount)`, best-effort by design: the result is ignored
+     *      and no return data is copied (no return bomb). A reverting, `false`-returning or codeless
+     *      token leaves the gateway's pull to decide. All remaining gas is forwarded; a token that
+     *      burns it can run the transaction out of gas, which is no new exposure, since the gateway
+     *      calls that same token's `transferFrom` in the same transaction.
+     *
+     * @param token   The token to approve.
+     * @param amount  The exact allowance to set.
+     */
+    function _tryApprove(address token, uint256 amount) private {
+        bytes memory cd = abi.encodeWithSelector(IERC20_APPROVE_SELECTOR, UNIVERSAL_GATEWAY_PC, amount);
+        assembly {
+            pop(call(gas(), token, 0, add(cd, 0x20), mload(cd), 0, 0))
+        }
+    }
+
+    /**
+     * @dev Leaves `allowance(wallet, gateway)` at 0 when the token reports a non-zero one. Best-effort,
+     *      never reverts. The staticcall copies at most 32 bytes of return data into scratch space
+     *      (0x00-0x1f), which is read into a stack variable immediately; nothing relies on it after.
+     *      In the normal case the gateway pulled exactly the approved amount, so no second approve
+     *      is sent.
+     *
+     * @param token  The token whose allowance to the gateway is cleared.
+     */
+    function _clearGatewayAllowance(address token) private {
+        bytes memory q = abi.encodeWithSelector(IERC20_ALLOWANCE_SELECTOR, address(this), UNIVERSAL_GATEWAY_PC);
+        uint256 remaining;
+        bool ok;
+        assembly {
+            ok := staticcall(gas(), token, add(q, 0x20), mload(q), 0, 0x20)
+            if and(ok, gt(returndatasize(), 0x1f)) { remaining := mload(0) }
+        }
+        if (ok && remaining != 0) _tryApprove(token, 0);
     }
 
     /**
@@ -371,6 +496,7 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      *           batch may call the wallet's own lifecycle functions through `onlyOwnerOrSelf`.
      *         - Records one checkpoint per call, before the call, exactly as `execute` does.
      *         - Emits `OwnerExecutedWithSig`.
+     *         - Gateway outbounds are approved for the exact amount and cleared afterwards (see `_execute`).
      *
      * @param  mode               ERC-7579 mode word; must equal `intent.mode`.
      * @param  executionCalldata  Encoded execution; its hash must equal `intent.execCalldataHash`.
@@ -851,6 +977,7 @@ contract AGW is IAGW, ReentrancyGuardTransient {
      *           is never wrapped in try/catch.
      *         - Mode is single-only here: batching lives inside the multicall payload, bounded by the
      *           policy.
+     *         - Gateway outbounds are approved for the exact amount and cleared afterwards (see `_execute`).
      *
      * @param  rulesId            The rules set this call acts under. `rulesId` is the engine's
      *                            `permissionId`.

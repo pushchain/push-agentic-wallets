@@ -9,7 +9,7 @@ import { BaseTest } from "../Base.t.sol";
 
 import { MockPRC20 } from "../mocks/MockUniversalGateway.sol";
 
-import { AllowedCall, Config, NativeConfig, RulesType } from "../../src/libraries/Types.sol";
+import { AllowedCall, Config, NativeConfig, RulesType, UNLIMITED_CALLS } from "../../src/libraries/Types.sol";
 
 import { AGW } from "../../src/AGW.sol";
 
@@ -66,7 +66,8 @@ contract PushAgentWalletLifecycleTest is BaseTest {
             selector: bytes4(keccak256("swap(uint256,address)")),
             beneficiaryOffset: 36,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({
@@ -186,6 +187,7 @@ contract PushAgentWalletLifecycleTest is BaseTest {
         cfg.validUntil = uint48(block.timestamp + 365 days);
         cfg.target = target;
         cfg.selector = selector;
+        cfg.maxCalls = UNLIMITED_CALLS;
         return nativeInitData(cfg);
     }
 
@@ -384,7 +386,12 @@ contract PushAgentWalletLifecycleTest is BaseTest {
     function test_W24_ShapeCheckDoesNotValidateUrpContents() public {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: _addr("p"), selector: bytes4(0x11223344), beneficiaryOffset: 0, hasBeneficiary: false, maxValue: 0
+            target: _addr("p"),
+            selector: bytes4(0x11223344),
+            beneficiaryOffset: 0,
+            hasBeneficiary: false,
+            maxValue: 0,
+            pins: noPins()
         });
         Config memory bad = Config({
             initialized: false,

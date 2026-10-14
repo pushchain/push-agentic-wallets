@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { AllowedCall, Config, ModeSlot, NativeConfig } from "../../src/libraries/Types.sol";
+import { AllowedCall, Config, ModeSlot, NativeConfig, UNLIMITED_CALLS } from "../../src/libraries/Types.sol";
 
 import { UniversalRulesPolicyErrors } from "../../src/libraries/Errors.sol";
 
@@ -60,8 +60,9 @@ contract URPTeethTest is BaseTest {
 
     function _config(address asset) internal view returns (Config memory cfg) {
         AllowedCall[] memory calls = new AllowedCall[](1);
-        calls[0] =
-            AllowedCall({ target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0 });
+        calls[0] = AllowedCall({
+            target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0, pins: noPins()
+        });
 
         cfg = Config({
             initialized: false,
@@ -189,6 +190,7 @@ contract URPTeethTest is BaseTest {
         cfg.validUntil = VALID_UNTIL;
         cfg.target = hostileTarget;
         cfg.selector = bytes4(keccak256("stake(uint256)"));
+        cfg.maxCalls = UNLIMITED_CALLS;
 
         // ⚠️ THE ASSERTION THAT MAKES THE NAME TRUE. Count 0 means "must never be called", and empty
         // calldata matches ANY calldata — so this fails if native init calls the target with any

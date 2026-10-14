@@ -106,7 +106,8 @@ contract PushAgentWalletTest is BaseTest {
             selector: bytes4(keccak256("swap(uint256,address)")),
             beneficiaryOffset: 36,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({
@@ -539,11 +540,11 @@ contract PushAgentWalletTest is BaseTest {
         // non-factory callers are refused
         vm.prank(WALLET_OWNER);
         vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-        fresh.initializeAccount("");
+        fresh.initializeAccount("", new Session[](0));
 
         vm.prank(AGENT);
         vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-        fresh.initializeAccount("");
+        fresh.initializeAccount("", new Session[](0));
 
         // the factory succeeds, and both events fire
         vm.expectEmit(true, true, true, true, address(fresh));
@@ -552,14 +553,14 @@ contract PushAgentWalletTest is BaseTest {
         emit IAGW.AccountInitialized(WALLET_OWNER, address(engine));
 
         vm.prank(FACTORY);
-        fresh.initializeAccount("");
+        fresh.initializeAccount("", new Session[](0));
 
         assertTrue(fresh.isModuleInstalled(1, address(engine), ""), "engine installed as sole validator");
 
         // second call reverts
         vm.prank(FACTORY);
         vm.expectRevert(AGWErrors.AlreadyInitialized.selector);
-        fresh.initializeAccount("");
+        fresh.initializeAccount("", new Session[](0));
     }
 
     // ═══════════════════════════════════ W-21 ═══════════════════════════════════
@@ -725,7 +726,7 @@ contract PushAgentWalletTest is BaseTest {
         for (uint256 i; i < callers.length; ++i) {
             vm.prank(callers[i]);
             vm.expectRevert(AGWErrors.CallerIsNotFactory.selector);
-            walletImpl.initializeAccount("");
+            walletImpl.initializeAccount("", new Session[](0));
         }
     }
 

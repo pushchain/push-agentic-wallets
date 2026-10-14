@@ -188,6 +188,13 @@ library AGWFactoryErrors {
     error SignatureExpired(uint48 deadline);
     /// @dev deployWalletWithSig: the signature is not the owner's over the intent.
     error InvalidOwnerSignature();
+    /// @dev createWallet*: more than MAX_INITIAL_RULES rules.
+    error TooManyInitialRules(uint256 count);
+    /// @dev createWalletWithSig: intent.sessionHash is not keccak256(abi.encode(rules)). Carries the hash of the
+    ///      rules actually presented.
+    error IntentRulesMismatch(bytes32 actual);
+    /// @dev createWalletWithSig: intent.grantNonce is not 0 (a new wallet's first grant nonce).
+    error IntentGrantNonceNotZero(uint64 provided);
 }
 
 /// @title UniversalRulesPolicyErrors
@@ -294,8 +301,16 @@ library UniversalRulesPolicyErrors {
     error ValueOnlyWithPins();
     /// @dev init: a value-only config carrying an amount rule. Same reasoning.
     error ValueOnlyWithAmountRule();
-    /// @dev init: pins.length > MAX_PINS.
+    /// @dev init, native: `maxCalls` is 0. A rule that can make no call authorises nothing; write
+    ///      `UNLIMITED_CALLS` for no limit.
+    error ZeroMaxCalls();
+    /// @dev init: pins.length > MAX_PINS. Raised per allowed call on the EVM side, and for the
+    ///      native pin array.
     error TooManyPins(uint256 count);
+    /// @dev init, universal EVM: more than `MAX_ALLOWED_CALL_PINS` pins summed across the allow-list.
+    ///      Distinct from `TooManyPins`, which bounds ONE entry: a rules set can satisfy that for every
+    ///      entry and still ask for 256 pins in total.
+    error TooManyAllowedCallPins(uint256 total);
 
     // check
     error TargetMismatch(address actual, address expected);
@@ -307,6 +322,13 @@ library UniversalRulesPolicyErrors {
     error TotalValueExceeded(uint256 newSpent, uint256 cap);
     error CalldataTooShortForPin(uint256 actualLength, uint256 index, uint256 needed);
     error ArgPinMismatch(bytes32 actual, uint256 index, bytes32 expected);
+    /// @dev A `PinOp.MAX` pin failed: the argument word, read as `uint256`, exceeds the pinned ceiling.
+    ///      THE OFFENDING VALUE COMES FIRST, as every native error does, because the engine truncates
+    ///      `checkAction` revert data to a selector plus 28 bytes of the first argument — an index or a
+    ///      bound in that position would surface as zeros and tell nobody anything.
+    ///      `index` is the pin's index WITHIN ITS ENTRY on the EVM side, and within `cfg.pins` on the
+    ///      native side.
+    error ArgPinAboveMax(uint256 actual, uint256 index, uint256 max);
     error CalldataTooShortForAmount(uint256 actualLength, uint256 needed);
     error NativeAmountExceedsCap(uint256 amount, uint256 cap);
     error TotalNativeAmountExceeded(uint256 newSpent, uint256 cap);
@@ -342,7 +364,7 @@ library UniversalRulesPolicyErrors {
     error SvmPinRuleOutOfRange(uint256 pin, uint8 rule);
     /// @dev init: account index at or beyond MAX_SVM_ACCOUNTS, or beyond the rule's `maxAccounts`.
     error SvmPinIndexOutOfRange(uint256 pin, uint8 accountIndex);
-    /// @dev init: a rule's fixed account count exceeds the S13 bound, so no request could meet it.
+    /// @dev init: `maxAccounts` is 0 or above `MAX_SVM_ACCOUNTS` (and not `ANY_ACCOUNT_COUNT`).
     error SvmMaxAccountsOutOfRange(uint256 rule, uint8 maxAccounts);
     /// @dev init: two account pins name the same (rule, index).
     error DuplicateSvmPin(uint256 first, uint256 second);

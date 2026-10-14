@@ -13,9 +13,12 @@ import {
     Config,
     ModeSlot,
     NativeConfig,
-    RulesType
+    PinOp,
+    RulesType,
+    UNLIMITED_CALLS
 } from "../../src/libraries/Types.sol";
 import { MockUniversalGateway, MockPRC20 } from "../mocks/MockUniversalGateway.sol";
+import { PullingGatewayMock } from "../mocks/PullingGatewayMock.sol";
 import { StakeDummy } from "../mocks/StakeDummy.sol";
 import { MockERC20 } from "../mocks/MockERC20.sol";
 import { MockUEA } from "../mocks/MockUEA.sol";
@@ -75,6 +78,9 @@ contract E2ETest is BaseTest {
     /// @dev `supply(address,uint256,address,uint16)` — the beneficiary is argument 3, so the word
     ///      sits at 4 (selector) + 32 (asset) + 32 (amount) = offset 68.
     bytes4 internal constant SUPPLY_SELECTOR = bytes4(keccak256("supply(address,uint256,address,uint16)"));
+    /// @dev The call an argument pin exists to constrain: it has no beneficiary argument, so only a
+    ///      pinned spender can bound it.
+    bytes4 internal constant APPROVE_SELECTOR = bytes4(keccak256("approve(address,uint256)"));
     uint16 internal constant BENEFICIARY_OFFSET = 68;
 
     uint256 internal constant HUNDRED_USDC = 100e6;
@@ -112,7 +118,8 @@ contract E2ETest is BaseTest {
             selector: SUPPLY_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 0 // supply() is non-payable on the far chain
+            maxValue: 0, // supply() is non-payable on the far chain
+            pins: noPins()
         });
 
         return universalInitData(
@@ -180,6 +187,72 @@ contract E2ETest is BaseTest {
         vm.prank(originKey);
         vm.expectRevert(abi.encodeWithSelector(AGWErrors.CallerIsNotAgent.selector, livePid, originKey));
         bobAgw.executeAsAgent(livePid, _singleMode(), ecd);
+    }
+
+    /**
+     * The Bob flow with NO owner approve step at all (§6.1): deploy, grant, fund, and the agent's
+     * outbound goes through against a gateway that really pulls, because the wallet approves exactly
+     * the amount itself and leaves nothing behind. The owner side is never touched after the grant.
+     */
+    function test_BobFlow_NoGatewayApprovalStep() public {
+        vm.etch(GATEWAY, type(PullingGatewayMock).runtimeCode);
+        PullingGatewayMock pulling = PullingGatewayMock(payable(GATEWAY));
+
+        vm.prank(BOB_UEA);
+        bobAgw = AGW(payable(factory.deployWallet("lending")));
+        vm.prank(BOB_UEA);
+        permissionId = bobAgw.grantRules(canonicalSession(agentConfig(agentAddr), _urpConfig()));
+        pUSDC.mint(address(bobAgw), HUNDRED_USDC);
+        vm.deal(address(bobAgw), 1 ether);
+
+        assertEq(pUSDC.allowance(address(bobAgw), GATEWAY), 0, "nobody ever approved the gateway");
+        uint64 checkpointsBefore = bobAgw.checkpointCount();
+
+        _submitRequest(_executionCalldata(HUNDRED_USDC, 0.05 ether));
+
+        assertEq(pulling.callCount(), 1, "one outbound");
+        assertEq(pulling.allowanceAtEntry(), HUNDRED_USDC, "the gateway saw exactly the amount");
+        assertEq(pUSDC.balanceOf(GATEWAY), HUNDRED_USDC, "the gateway pulled 100 pUSDC");
+        assertEq(pUSDC.balanceOf(address(bobAgw)), 0, "100 pUSDC left the wallet");
+        assertEq(_spent(permissionId), HUNDRED_USDC, "URP.assets[0].spent == 100e6");
+        assertEq(pUSDC.allowance(address(bobAgw), GATEWAY), 0, "no allowance survives the outbound");
+        assertEq(bobAgw.checkpointCount(), checkpointsBefore, "the owner side was never touched");
+    }
+
+    /**
+     * A Push-EOA Bob — whose multicall core rejects — deploys and grants in ONE call with
+     * `createWallet`, the agent's outbound goes through at once, and Bob's revoke stops the agent.
+     */
+    function test_BobFlow_CreateWalletOneCall() public {
+        address bobEoa = makeAddr("0xbobeoa");
+        (address predicted,) = factory.predictWallet(bobEoa, 0);
+
+        Session[] memory rules = new Session[](1);
+        rules[0] = canonicalSession(agentConfig(agentAddr), _urpConfig());
+
+        vm.prank(bobEoa);
+        (address wallet, bytes32[] memory rulesIds) = factory.createWallet("bob", rules);
+        bobAgw = AGW(payable(wallet));
+
+        assertEq(wallet, predicted, "deployed at the predicted address");
+        assertEq(factory.ownerOf(wallet), bobEoa, "Bob owns it");
+        assertEq(bobAgw.agentOf(rulesIds[0]), agentAddr, "the rules set names the agent");
+
+        pUSDC.mint(wallet, HUNDRED_USDC);
+        vm.deal(wallet, 1 ether);
+
+        _act(agentAddr, agentAddr, rulesIds[0], _executionCalldata(HUNDRED_USDC, 0.05 ether));
+        assertEq(gateway.callCount(), 1, "the agent's outbound dispatched immediately");
+        assertEq(gateway.lastCall().sender, wallet, "from the wallet");
+        assertEq(_spent(rulesIds[0]), HUNDRED_USDC, "URP metered it");
+
+        vm.prank(bobEoa);
+        bobAgw.revokeRules(rulesIds[0]);
+
+        bytes memory ecd = _executionCalldata(0, 0.01 ether);
+        vm.prank(agentAddr);
+        vm.expectRevert(abi.encodeWithSelector(AGWErrors.CallerIsNotAgent.selector, rulesIds[0], agentAddr));
+        bobAgw.executeAsAgent(rulesIds[0], _singleMode(), ecd);
     }
 
     /// @dev Runs stages 3, 5, 7b and 7 with `agent` named in the rules set and `caller` submitting:
@@ -351,6 +424,89 @@ contract E2ETest is BaseTest {
 
         assertEq(gateway.callCount(), 0, "nothing dispatched");
         assertEq(_spent(permissionId), 0, "nothing metered");
+    }
+
+    /**
+     * An ARGUMENT PIN binds end to end, through the real wallet, the real engine and the real URP.
+     *
+     * The rule allows `approve(address,uint256)` on the token with the SPENDER PINNED to Morpho.
+     * That is the shape the beneficiary check cannot express — `approve` has no beneficiary
+     * argument, and requiring "spender == CEA" would make the call useless — so before pins this
+     * mandate could approve anyone, after which the approved party drains the CEA on the
+     * destination chain, where URP has no reach at all.
+     *
+     * Asserted through the engine, so the revert arrives rewrapped as `PolicyCheckReverted` with
+     * only the selector surviving: that is what a real agent sees.
+     */
+    function test_EvmPin_ApproveSpender_BindsEndToEnd() public {
+        vm.prank(BOB_UEA);
+        bobAgw = AGW(payable(factory.deployWallet("pinned-approve")));
+
+        AllowedCall[] memory rules = new AllowedCall[](1);
+        rules[0] = AllowedCall({
+            target: address(pUSDC),
+            selector: APPROVE_SELECTOR,
+            beneficiaryOffset: 0,
+            hasBeneficiary: false,
+            maxValue: 0,
+            pins: eqPin(4, MORPHO_BLUE) // the spender, argument 1
+        });
+
+        vm.prank(BOB_UEA);
+        permissionId = bobAgw.grantRules(
+            canonicalSession(
+                agentConfig(agentAddr),
+                universalInitData(
+                    Config({
+                        initialized: false,
+                        validUntil: uint48(block.timestamp + 30 days),
+                        expectedCEA: BOB_AGW_CEA,
+                        maxGasPerCall: 1 ether,
+                        assets: oneAsset(address(pUSDC), HUNDRED_USDC, HUNDRED_USDC),
+                        allowedCalls: rules
+                    })
+                )
+            )
+        );
+
+        pUSDC.mint(address(bobAgw), HUNDRED_USDC);
+        vm.deal(address(bobAgw), 1 ether);
+
+        // ── the pinned spender is permitted, and the outbound reaches the gateway ──
+        Multicall[] memory good = new Multicall[](1);
+        good[0] = Multicall({
+            to: address(pUSDC), value: 0, data: abi.encodeWithSelector(APPROVE_SELECTOR, MORPHO_BLUE, HUNDRED_USDC)
+        });
+        _submitRequest(
+            ExecutionLib.encodeSingle(
+                GATEWAY, 0, outboundRequest(address(pUSDC), HUNDRED_USDC, 0.01 ether, address(bobAgw), good)
+            )
+        );
+        assertEq(gateway.callCount(), 1, "the pinned approve dispatched");
+        assertEq(_spent(permissionId), HUNDRED_USDC, "and metered");
+
+        // ── any other spender is refused, by the pin, before anything is dispatched ──
+        Multicall[] memory evil = new Multicall[](1);
+        evil[0] = Multicall({
+            to: address(pUSDC), value: 0, data: abi.encodeWithSelector(APPROVE_SELECTOR, agentAddr, type(uint256).max)
+        });
+        expectUrpGate(
+            abi.encodeWithSelector(
+                UniversalRulesPolicyErrors.ArgPinMismatch.selector,
+                bytes32(uint256(uint160(agentAddr))),
+                uint256(0),
+                bytes32(uint256(uint160(MORPHO_BLUE)))
+            )
+        );
+        vm.prank(agentAddr);
+        bobAgw.executeAsAgent(
+            permissionId,
+            _singleMode(),
+            ExecutionLib.encodeSingle(GATEWAY, 0, outboundRequest(address(pUSDC), 0, 0.01 ether, address(bobAgw), evil))
+        );
+
+        assertEq(gateway.callCount(), 1, "nothing further dispatched");
+        assertEq(_spent(permissionId), HUNDRED_USDC, "and nothing further metered");
     }
 
     /// Failure atomicity at system level: the gateway reverts, and URP's counter and the metering
@@ -596,7 +752,7 @@ contract E2ETest is BaseTest {
 
     function _nativeConfigFor(StakeDummy stake, address beneficiary) internal view returns (NativeConfig memory c) {
         ArgPin[] memory pins = new ArgPin[](1);
-        pins[0] = ArgPin({ offset: 4, expected: bytes32(uint256(uint160(beneficiary))) });
+        pins[0] = ArgPin({ offset: 4, op: PinOp.EQ, value: bytes32(uint256(uint160(beneficiary))) });
 
         c = NativeConfig({
             initialized: false,
@@ -608,7 +764,7 @@ contract E2ETest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: true, offset: 36, maxPerCall: 50e6, maxTotal: 60e6 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: pins
         });

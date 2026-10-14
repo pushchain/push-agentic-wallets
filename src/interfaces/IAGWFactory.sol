@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import { Session } from "smartsessions/DataTypes.sol";
+
 import { OwnerIntent } from "../libraries/Types.sol";
 
 /**
@@ -44,7 +46,30 @@ interface IAGWFactory {
         external
         returns (address wallet);
 
-    /// @notice PAUSER_ROLE only. Gates `deployWallet` and `deployWalletWithSig` and nothing else.
+    /// @notice Deploys the caller's next agent wallet and grants it `rules`, atomically. THE CALLER IS THE
+    ///         OWNER. Either the wallet exists with every rule, or nothing happened.
+    /// @dev    Deploys index `walletCount(caller)` at the predicted address, then grants each rule in order
+    ///         through the wallet's own `grantRules` path. `rules` may be empty (then exactly `deployWallet`)
+    ///         and holds at most `MAX_INITIAL_RULES`. `rulesIds[i]` is the id `grantRules(rules[i])` would
+    ///         have returned at grant nonce `i`.
+    function createWallet(string calldata label, Session[] calldata rules)
+        external
+        returns (address wallet, bytes32[] memory rulesIds);
+
+    /// @notice `createWallet` for `intent.owner`, authorised by the owner's signature and presented by
+    ///         `intent.executor`.
+    /// @dev    The deploy checks are `deployWalletWithSig`'s. On the signature path the intent also binds
+    ///         the rules: `intent.sessionHash` must equal `keccak256(abi.encode(rules))` (the whole array)
+    ///         and `intent.grantNonce` must be 0. `OwnerIntent` and its typehash are unchanged.
+    function createWalletWithSig(
+        OwnerIntent calldata intent,
+        bytes calldata sig,
+        string calldata label,
+        Session[] calldata rules
+    ) external returns (address wallet, bytes32[] memory rulesIds);
+
+    /// @notice PAUSER_ROLE only. Gates `deployWallet`, `deployWalletWithSig`, `createWallet` and
+    ///         `createWalletWithSig` and nothing else.
     function pause() external;
 
     /// @notice OPERATOR_ROLE only. The split from `pause` is deliberate (see the header).

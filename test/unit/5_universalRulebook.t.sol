@@ -92,7 +92,8 @@ contract URPTest is BaseTest {
             selector: SWAP_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
     }
 
@@ -844,7 +845,8 @@ contract URPTest is BaseTest {
                 selector: bytes4(keccak256(abi.encode("fn", i))),
                 beneficiaryOffset: BENEFICIARY_OFFSET,
                 hasBeneficiary: true,
-                maxValue: 1 ether
+                maxValue: 1 ether,
+                pins: noPins()
             });
         }
     }
@@ -1306,14 +1308,16 @@ contract URPTest is BaseTest {
             selector: SWAP_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         rules[1] = AllowedCall({
             target: CEA, // the owner listed their own destination account
             selector: POKE_SELECTOR,
             beneficiaryOffset: 0,
             hasBeneficiary: false,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         _init(_config(rules));
 
@@ -1553,7 +1557,8 @@ contract URPTest is BaseTest {
             selector: POKE_SELECTOR,
             beneficiaryOffset: 65_535, // a dead offset — never read, because hasBeneficiary is false
             hasBeneficiary: false,
-            maxValue: 0
+            maxValue: 0,
+            pins: noPins()
         });
         _init(_config(rules));
 
@@ -1572,7 +1577,12 @@ contract URPTest is BaseTest {
     function test_DeadOffset_FailsClosed() public {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: PROTOCOL, selector: SWAP_SELECTOR, beneficiaryOffset: 65_535, hasBeneficiary: true, maxValue: 0
+            target: PROTOCOL,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: 65_535,
+            hasBeneficiary: true,
+            maxValue: 0,
+            pins: noPins()
         });
         _init(_config(rules));
 
