@@ -1,0 +1,22 @@
+{
+  "network": "push-donut-testnet",
+  "chainId": 42101,
+  "explorer": "https://donut.push.network",
+  "note": "Push core infrastructure on Donut, and the PRC20 tokens the cross-chain demo uses. NOT deployed by this repo. Owned by the demo: our own contracts are read from deployments/address-book-v5/push_agw_contracts.json and are never copied here. Flat name -> address map, matching sepolia.json.",
+  "UniversalGatewayPC": "0x00000000000000000000000000000000000000C1",
+  "UniversalCore": "0x00000000000000000000000000000000000000C0",
+  "UEAFactory": "0x00000000000000000000000000000000000000eA",
+  "PRC20_USDC": "0x7A58048036206bB898008b5bBDA85697DB1e5d66",
+  "PRC20_PETH": "0x2971824Db68229D087931155C2b8bB820B275809",
+  "evidence": {
+    "UniversalCore": "Returned by UniversalGatewayPC.universalCore(). Answers getOutboundTxGasAndFees.",
+    "UEAFactory": "The only probed address answering computeUEA((string,string,bytes)); its EIP-1967 implementation slot is distinct from the gateway's and UniversalCore's.",
+    "PRC20_USDC": "symbol() == 'USDC.eth' (NOT the deprecated 'USDC.eth.old' at 0x387b9C8D...), 6 decimals, SOURCE_CHAIN_NAMESPACE() == 'eip155:11155111', quote resolves to eip155:11155111. Its quote's gasToken is the pETH PRC20 0x2971824D..., which cross-checks the token table. Re-checked live 2026-10-10.",
+    "PRC20_PETH": "Returned by UniversalCore.gasTokenPRC20ByChainNamespace('eip155:11155111'); symbol() == 'pETH'; SOURCE_CHAIN_NAMESPACE() == 'eip155:11155111'. Read live 2026-10-10. Used only by G7 as a Sepolia-bound token the rules do not list."
+  },
+  "deprecated": {
+    "note": "Recorded so a stale address found in an older document is recognisable as stale rather than mistaken for live. Both still quote and still resolve to Sepolia, so choosing one fails SILENTLY. Never use these.",
+    "PRC20_USDC_old": "0x387b9C8Db60E74999aAAC5A2b7825b400F12d68E",
+    "PRC20_USDT_old": "0xCA0C5E6F002A389E1580F0DB7cd06e4549B5F9d3"
+  }
+}

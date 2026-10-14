@@ -1,0 +1,262 @@
+# Push Agentic Wallet — PUSH-NATIVE demo runner
+#
+# One chain. One endpoint. No bridge, no relay, no waiting.
+#
+#   just preflight        # run at T-1 hour AND five minutes before presenting
+#   just fund             # mint dUSDC, fill the reward pool, top up the agent's gas
+#   just act1             # Bob arrives, funds, approves, grants — 1d is the opening beat
+#   just state            # run between every act
+#   just act2             # THE CENTRAL BEAT: the agent sends its own transaction
+#   just gauntlet         # g1 .. g6 and d1 — simulations, sent as the agent
+#   just act4a .. act4f   # the boundary
+#
+# EVERY BROADCASTING RECIPE HAS A `-dry` VARIANT that broadcasts nothing. Use them during
+# rehearsal; a dry run costs nothing and catches a bad request before it costs an act. A dry run
+# still writes the demo ledger (demo-native/state/ledger.json), exactly as the live recipe would.
+#
+# Run from the repo root: `just -f demo-native/justfile <recipe>`, or `cd demo-native && just <recipe>`.
+#
+# ⚠️ SEPARATE FROM demo/justfile ON PURPOSE. Two independent entry points cannot break each other
+#    mid-presentation, and the two demos share no state.
+
+set dotenv-load := true
+set dotenv-filename := "../.env"
+set working-directory := ".."
+
+donut := env_var_or_default("PUSH_DONUT_RPC_URL", "")
+
+# `forge script` prints its own preamble and traces. -vv is the quietest level that still shows
+# console.log output, which is the only thing the audience should see.
+_v := "-vv"
+_rpc := "--rpc-url " + donut + " " + _v
+_go := "--broadcast"
+
+default:
+    @just --list --unsorted
+
+# ───────────────────────────────── preflight ─────────────────────────────────
+
+# The green/red checklist. Reads everything live; counts failures rather than stopping at the first.
+preflight:
+    forge script demo-native/script/Preflight.s.sol:Preflight {{_rpc}}
+
+# Live state. Run between every act.
+state:
+    forge script demo-native/script/05_inspect/50_State.s.sol:State {{_rpc}}
+
+# ─────────────────────────────────── setup ───────────────────────────────────
+#
+# THE FIXTURES ARE LIVE. DemoUSDC and StakeDummy are already deployed and recorded in
+# demo-native/config/native_demo.json, and `just preflight` checks their code. Run `just fund`
+# before a run; run `token` and `stakedummy` ONLY to rebuild the fixtures, then paste the printed
+# addresses into that file.
+
+# Rebuild everything from nothing. NOT needed while the fixtures are live.
+setup: token stakedummy fund
+
+token:
+    forge script demo-native/script/00_setup/00_DeployDemoUSDC.s.sol:DeployDemoUSDC {{_rpc}} {{_go}}
+
+token-dry:
+    forge script demo-native/script/00_setup/00_DeployDemoUSDC.s.sol:DeployDemoUSDC {{_rpc}}
+
+stakedummy:
+    forge script demo-native/script/00_setup/01_DeployStakeDummy.s.sol:DeployStakeDummy {{_rpc}} {{_go}}
+
+stakedummy-dry:
+    forge script demo-native/script/00_setup/01_DeployStakeDummy.s.sol:DeployStakeDummy {{_rpc}}
+
+# Mint dUSDC to Bob, fill the reward pool, and top the agent and the 4f accomplice up with PC.
+fund:
+    forge script demo-native/script/00_setup/02_FundAll.s.sol:FundAll {{_rpc}} {{_go}}
+
+fund-dry:
+    forge script demo-native/script/00_setup/02_FundAll.s.sol:FundAll {{_rpc}}
+
+# ────────────────────────────────── act 1 ──────────────────────────────────
+
+# The whole of Act 1. 1a-1c are off-camera; 1d is where the demo opens.
+act1: act1a act1b act1c act1d
+
+# 1a · Bob deploys his wallet. No UEA, no second chain — he calls the factory himself.
+act1a:
+    forge script demo-native/script/01_bob/10_DeployWallet.s.sol:DeployWallet {{_rpc}} {{_go}}
+
+act1a-dry:
+    forge script demo-native/script/01_bob/10_DeployWallet.s.sol:DeployWallet {{_rpc}}
+
+# 1b · Bob funds it. This balance is the ceiling on everything the agent can lose.
+act1b:
+    forge script demo-native/script/01_bob/11_FundWallet.s.sol:FundWallet {{_rpc}} {{_go}}
+
+act1b-dry:
+    forge script demo-native/script/01_bob/11_FundWallet.s.sol:FundWallet {{_rpc}}
+
+# 1c · Bob approves StakeDummy for EXACTLY the lifetime budget, through the owner door.
+#      `approve` is deliberately NOT in the agent's rules.
+act1c:
+    forge script demo-native/script/01_bob/12_ApproveStakeDummy.s.sol:ApproveStakeDummy {{_rpc}} {{_go}}
+
+act1c-dry:
+    forge script demo-native/script/01_bob/12_ApproveStakeDummy.s.sol:ApproveStakeDummy {{_rpc}}
+
+# 1d · THE OPENING BEAT. The rules, on one screen.
+act1d:
+    forge script demo-native/script/01_bob/13_GrantRules.s.sol:GrantRules {{_rpc}} {{_go}}
+
+act1d-dry:
+    forge script demo-native/script/01_bob/13_GrantRules.s.sol:GrantRules {{_rpc}}
+
+# ────────────────────────────────── act 2 ──────────────────────────────────
+
+# THE CENTRAL BEAT. The agent sends its own transaction; the stake lands in it.
+# Parameterised: `just act2` stakes 2.5; `just stake 1` stakes 1.
+act2:
+    forge script demo-native/script/02_agent/20_Stake.s.sol:Stake {{_rpc}} {{_go}}
+
+act2-dry:
+    forge script demo-native/script/02_agent/20_Stake.s.sol:Stake {{_rpc}}
+
+# Acts 3b and 3c: the same script, a different amount. 25 then 10 exhausts the budget.
+stake amount:
+    STAKE_AMOUNT=$(echo "{{amount}} * 1000000 / 1" | bc) forge script demo-native/script/02_agent/20_Stake.s.sol:Stake {{_rpc}} {{_go}}
+
+stake-dry amount:
+    STAKE_AMOUNT=$(echo "{{amount}} * 1000000 / 1" | bc) forge script demo-native/script/02_agent/20_Stake.s.sol:Stake {{_rpc}}
+
+# ────────────────────────────── act 3 · the gauntlet ──────────────────────────────
+#
+# ALL SIMULATIONS: nothing is broadcast and nothing changes. G1-G7 are sent as the agent; D1 is
+# sent as Bob. Freely re-runnable in any order, except G7, which needs the budget to be spent.
+
+# Everything that needs no spent budget. Run g7 separately, after `stake 2.5` and `stake 1`.
+gauntlet: g1 g2 g3 g4 g5 g6 d1
+
+# G1 · a different contract. Refused by the ENGINE — no matching action id.
+g1:
+    forge script demo-native/script/03_gauntlet/30_G1_WrongContract.s.sol:G1_WrongContract {{_rpc}}
+
+# G2 · a different function on the right contract. Also the engine.
+g2:
+    forge script demo-native/script/03_gauntlet/31_G2_WrongFunction.s.sol:G2_WrongFunction {{_rpc}}
+
+# G3 · ⚠️ THE ONE THAT MATTERS. The agent stakes to ITSELF. Gate N7.
+g3:
+    forge script demo-native/script/03_gauntlet/32_G3_BeneficiaryMismatch.s.sol:G3_BeneficiaryMismatch {{_rpc}}
+
+# G4 · just over the per-action cap. Gate N8.
+g4:
+    forge script demo-native/script/03_gauntlet/33_G4_PerCallCap.s.sol:G4_PerCallCap {{_rpc}}
+
+# G5 · one wei of native value, against a cap of zero. Gate N6.
+g5:
+    forge script demo-native/script/03_gauntlet/34_G5_ValueRejected.s.sol:G5_ValueRejected {{_rpc}}
+
+# G6 · someone else sends Act 2's exact call. Refused by the WALLET, before any policy.
+g6:
+    forge script demo-native/script/03_gauntlet/35_G6_Impostor.s.sol:G6_Impostor {{_rpc}}
+
+# G7 · the budget runs out. Run only after 2.5 + 2.5 + 1 have been staked.
+g7:
+    forge script demo-native/script/03_gauntlet/36_G7_LifetimeBudget.s.sol:G7_LifetimeBudget {{_rpc}}
+
+# D1 · the chain string decides the kind. A near-miss string turns the same grant cross-chain.
+d1:
+    forge script demo-native/script/03_gauntlet/37_D1_ChainDecides.s.sol:D1_ChainDecides {{_rpc}}
+
+# ────────────────────────────── act 4 · the boundary ──────────────────────────────
+
+# 4a' · a SECOND rules set, for one job: unstake, once.
+act4a-grant:
+    forge script demo-native/script/04_boundary/40_GrantUnstake.s.sol:GrantUnstake {{_rpc}} {{_go}}
+
+act4a-grant-dry:
+    forge script demo-native/script/04_boundary/40_GrantUnstake.s.sol:GrantUnstake {{_rpc}}
+
+# 4a · the agent withdraws — to the WALLET, never to itself.
+act4a:
+    forge script demo-native/script/04_boundary/41_AgentUnstake.s.sol:AgentUnstake {{_rpc}} {{_go}}
+
+act4a-dry:
+    forge script demo-native/script/04_boundary/41_AgentUnstake.s.sol:AgentUnstake {{_rpc}}
+
+# G8 · a second unstake, under one-call rules. Gate N9, before dispatch. Simulation.
+g8:
+    forge script demo-native/script/04_boundary/42_G8_SecondUnstakeFails.s.sol:G8_SecondUnstakeFails {{_rpc}}
+
+# 4b · the agent tries to move the money out. Refused by the engine. Simulation.
+act4b:
+    forge script demo-native/script/04_boundary/43_AgentTransferFails.s.sol:AgentTransferFails {{_rpc}}
+
+# 4c · Bob takes everything back, instantly, through the owner door.
+act4c:
+    forge script demo-native/script/04_boundary/44_OwnerWithdraw.s.sol:OwnerWithdraw {{_rpc}} {{_go}}
+
+act4c-dry:
+    forge script demo-native/script/04_boundary/44_OwnerWithdraw.s.sol:OwnerWithdraw {{_rpc}}
+
+# 4d · revoke everything. Immediate, no timelock.
+act4d:
+    forge script demo-native/script/04_boundary/45_RevokeAll.s.sol:RevokeAll {{_rpc}} {{_go}}
+
+act4d-dry:
+    forge script demo-native/script/04_boundary/45_RevokeAll.s.sol:RevokeAll {{_rpc}}
+
+# 4e · THE CLOSING BEAT. A flawless request from the agent, against revoked rules. Simulation.
+act4e:
+    forge script demo-native/script/04_boundary/46_RevokedRulesRefuse.s.sol:RevokedRulesRefuse {{_rpc}}
+
+# 4f · the unpinned-approve demonstration. FIVE steps, in order. Skippable live.
+act4f: act4f-1 act4f-2 act4f-3 act4f-4 act4f-5
+
+# 4f-1 · a second wallet for Bob, funded with money we intend to lose.
+act4f-1:
+    forge script demo-native/script/04_boundary/47_Throwaway_DeployAndFund.s.sol:Throwaway_DeployAndFund {{_rpc}} {{_go}}
+
+act4f-1-dry:
+    forge script demo-native/script/04_boundary/47_Throwaway_DeployAndFund.s.sol:Throwaway_DeployAndFund {{_rpc}}
+
+# 4f-2 · rules that allow approve() and pin nothing. Granted successfully.
+act4f-2:
+    forge script demo-native/script/04_boundary/48_GrantUnpinnedApprove.s.sol:GrantUnpinnedApprove {{_rpc}} {{_go}}
+
+act4f-2-dry:
+    forge script demo-native/script/04_boundary/48_GrantUnpinnedApprove.s.sol:GrantUnpinnedApprove {{_rpc}}
+
+# 4f-3 · ⚠️ THIS ONE SUCCEEDS. The agent approves an accomplice, who drains the wallet.
+act4f-3:
+    forge script demo-native/script/04_boundary/49_AccompliceDrains.s.sol:AccompliceDrains {{_rpc}} {{_go}}
+
+act4f-3-dry:
+    forge script demo-native/script/04_boundary/49_AccompliceDrains.s.sol:AccompliceDrains {{_rpc}}
+
+# 4f-4 · the same rules, with the spender pinned.
+act4f-4:
+    forge script demo-native/script/04_boundary/4A_GrantPinnedApprove.s.sol:GrantPinnedApprove {{_rpc}} {{_go}}
+
+act4f-4-dry:
+    forge script demo-native/script/04_boundary/4A_GrantPinnedApprove.s.sol:GrantPinnedApprove {{_rpc}}
+
+# 4f-5 · the same request, refused. Gate N7. Simulation.
+act4f-5:
+    forge script demo-native/script/04_boundary/4B_PinnedApproveRefuses.s.sol:PinnedApproveRefuses {{_rpc}}
+
+# ─────────────────────────────────── reset ───────────────────────────────────
+
+# Revoke every rules set and sweep every wallet back to Bob. Run after any rehearsal.
+# It does NOT clear the ledger; delete demo-native/state/ledger.json for a fresh run.
+reset:
+    forge script demo-native/script/99_reset/90_RevokeAll.s.sol:Reset {{_rpc}} {{_go}}
+
+reset-dry:
+    forge script demo-native/script/99_reset/90_RevokeAll.s.sol:Reset {{_rpc}}
+
+# ─────────────────────────────────── tests ───────────────────────────────────
+
+# This folder's own suite. A SEPARATE PROFILE: plain `forge test` must keep running exactly the
+# contract suite, which is the contracts' specification.
+test:
+    FOUNDRY_PROFILE=demo-native forge test -vv
+
+build:
+    FOUNDRY_PROFILE=demo-native forge build demo-native

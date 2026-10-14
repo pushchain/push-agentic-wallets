@@ -35,6 +35,14 @@ fs_permissions = [
     # shared memory, so the ledger is the only way state survives from one act to the next — it is
     # what makes a failed step recoverable rather than fatal.
     { access = "read-write", path = "demo/state/" },
+    # The native demo's ledger (demo-native/state/ledger.json), for the same reason.
+    { access = "read-write", path = "demo-native/state/" },
+    # READ-ONLY: the demos' own libraries and address files (Push core, Sepolia, native fixtures).
+    { access = "read", path = "demo/lib/" },
+    { access = "read", path = "demo-native/lib/" },
+    # read-write: 02_DeployStakeDummy records a rebuilt StakeDummy in demo/config/sepolia.json.
+    { access = "read-write", path = "demo/config/" },
+    { access = "read", path = "demo-native/config/" },
     # READ-ONLY: the core repo's own build artifacts, which the UniversalMarketplace E2E deploys with
     # vm.deployCode so it runs exactly the bytecode that ships (test_E2E_13 pins it).
     { access = "read", path = "lib/push-chain-core-contracts/out/" },
@@ -65,6 +73,9 @@ allow_paths = ["../push-chain-core-contracts"]
 # which the justfile wraps. Everything else is inherited from [profile.default].
 [profile.demo]
 test = "demo/test"
+
+[profile.demo-native]
+test = "demo-native/test"
 
 [fmt]
 line_length = 120
