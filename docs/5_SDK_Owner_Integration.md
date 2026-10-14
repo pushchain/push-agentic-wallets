@@ -1,20 +1,23 @@
 # AGW for the SDK — owner side
 
 What the SDK needs to create agentic wallets, grant and revoke rules, act as the owner, and read state, against the
-**v5 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
+**v6 deployment on Donut**. Owner side only: the agent side (`executeAsAgent`, building outbound requests) is out of
 scope here.
 
-Everything below is taken from the deployed contracts (commit `2e61e13`). ABIs: use the verified contracts on
+Everything below is taken from the deployed contracts (commit `ffd567d`). ABIs: use the verified contracts on
 [donut.push.network](https://donut.push.network), or the build artifacts in this repo (`out/<Contract>.sol/<Contract>.json`).
 Full address book: [`docs/addresses/donut.md`](addresses/donut.md).
 
-**What changed from v4:**
-- **New factory:** `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`. It is also the EIP-712 `verifyingContract`, so every
-  `OwnerIntent` must be signed for the new address (§7).
-- **New wallet implementation**, with a stored label (§3, [Label](#label)).
-- URP, SmartSession and AgentValidator keep their addresses, and rule encoding is unchanged.
-- Wallets from the v4 factory (`0xaF88…1aaF`) still work but have no label functions. Deploy new wallets only through
-  the v5 factory.
+**What changed from v5:**
+- **Every address is new** (factory, wallet implementation, URP, SmartSession, AgentValidator). The factory
+  `0xFBBEB6a365178fAaA81A9789a5f64b300c37e5bc` is also the EIP-712 `verifyingContract`, so every `OwnerIntent` must be
+  signed for the new address (§7).
+- **No approve step** before an outbound: the wallet approves the gateway for exactly the request amount and clears it.
+- **`createWallet` / `createWalletWithSig`** deploy a wallet and grant up to 8 rules in one transaction.
+- **Rule encoding changed:** EVM allow-list entries carry `ArgPin[] pins`; native `maxCalls = 0` is refused (unlimited is
+  `type(uint32).max`); Solana `maxAccounts` is `1`–`64` or `255` for any.
+- Wallets from the v5 factory (`0x8137…Ccc5`) still work against the old URP and engine, without any of the above.
+  Deploy new wallets only through the v6 factory.
 
 ---
 
@@ -22,11 +25,11 @@ Full address book: [`docs/addresses/donut.md`](addresses/donut.md).
 
 | Contract | Address (Donut, chain id `42101`) | What the SDK does with it |
 |---|---|---|
-| **AGWFactory** (proxy) | `0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5` | Predict, deploy and look up wallets |
+| **AGWFactory** (proxy) | `0xFBBEB6a365178fAaA81A9789a5f64b300c37e5bc` | Predict, deploy and look up wallets |
 | **AGW** (one per user) | address from `predictWallet` | Grant / revoke rules, owner actions, reads |
-| **URP** (proxy) | `0x603E7f0aF6e1aAFf46DDfb28b1e99364f8BC59af` | Named inside every rule; read rule terms and spend |
-| **SmartSession** (engine) | `0x165A5E6782f39D30B38c7D97e1303e4CB2aD102a` | Read only: list a wallet's rules |
-| **AgentValidator** | `0x068EE2388475A98EE1f5a434C58bFF3444fffFe6` | Named inside every rule; never called |
+| **URP** (proxy) | `0xBA32e7A1500cb34311a31127bcD40CA52C8CFd36` | Named inside every rule; read rule terms and spend |
+| **SmartSession** (engine) | `0xf63DC0628fe1B25049FE3E3a3585Ef051CB98c1d` | Read only: list a wallet's rules |
+| **AgentValidator** | `0xBf08d8335c1cE41a577DB70666816027814737dD` | Named inside every rule; never called |
 | UniversalGatewayPC (Push core) | `0x00000000000000000000000000000000000000C1` | Named as the target of every cross-chain rule |
 | UniversalCore (Push core) | `0x00000000000000000000000000000000000000C0` | Look up a chain's gas token (`gasTokenPRC20ByChainNamespace`) |
 
@@ -135,7 +138,7 @@ in an **envelope**.
 
 ```solidity
 struct Session {
-    address      sessionValidator;          // AgentValidator 0x068E…FfFe6 (must equal wallet.SESSION_VALIDATOR())
+    address      sessionValidator;          // AgentValidator 0xBf08…37dD (must equal wallet.SESSION_VALIDATOR())
     bytes        sessionValidatorInitData;  // abi.encode(address agent), agent != address(0)
     bytes32      salt;                      // anything; the wallet overwrites it with its grant nonce
     PolicyData[] userOpPolicies;            // MUST be empty
@@ -353,7 +356,7 @@ const terms = encodeAbiParameters(
 const initData = encodeAbiParameters(parseAbiParameters('uint16, string, bytes'), [1, 'eip155:11155111', terms]);
 
 const session = {
-  sessionValidator: wallet.SESSION_VALIDATOR,                      // 0x068E…FfFe6
+  sessionValidator: wallet.SESSION_VALIDATOR,                      // 0xBf08…37dD
   sessionValidatorInitData: encodeAbiParameters([{ type: 'address' }], [agent]),
   salt: zeroHash,
   userOpPolicies: [],
@@ -448,7 +451,7 @@ OwnerIntent(address owner,address wallet,address executor,uint96 index,bytes32 s
 ```
 
 Domain: `name "AGWFactory"`, `version "1"`, `chainId = signerChainId`, `verifyingContract = factory proxy`
-(`0x8137F96A50EBF41d904e3678c84c391a0D1BCcc5`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
+(`0xFBBEB6a365178fAaA81A9789a5f64b300c37e5bc`, also for wallet doors), `salt = bytes32(uint256(42101))`. Check the local derivation against
 `factory.domainSeparator(signerChainId)` (or `wallet.domainSeparator(...)`, identical) before prompting.
 
 | Door | Contract | Fields it checks |
