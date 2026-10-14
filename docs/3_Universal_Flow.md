@@ -208,15 +208,15 @@ Layer 1  the execution payload  one single call: target = the gateway, value = P
         ├─ 4. the wallet enforces the verdict itself (authorizer, validAfter/validUntil)
         ├─ 5. the wallet refuses itself and the engine as target, whatever the verdict
         ├─▶ 6. dispatch THE EXACT VALIDATED BYTES ──▶ UniversalGatewayPC.sendUniversalTxOutbound
-        │                                                   ▲
-        │                                         msg.sender == 0xbobagw
-        │                                         ← decides which CEA executes
+        │      (the wallet approves PRC20_USDC to the       ▲
+        │       gateway for exactly 100e6 just before,     msg.sender == 0xbobagw
+        │       and leaves the allowance at 0 just after)  ← decides which CEA executes
         └─ 7. emit RulesActionAuthorized(rulesId, 0xagent, keccak256(execCalldata))
 ```
 
 - **Any single gate failing reverts the whole transaction** — counters, everything. A failed action costs the agent gas and changes nothing else. The agent's runtime is never trusted; URP is the trust boundary.
 - **Replay** is the sender's own nonce — the EOA's, or the UEA payload's. The wallet keeps no agent replay state: the same call sent twice is two actions, each checked and metered.
-- **Ordering note that looks wrong and is not:** the engine consults the session validator **after** the policies. The wallet has already checked the caller, but every policy, forever, must still be safe against arbitrary calldata the engine has not yet authenticated. URP is safe by construction: no external calls, effects last, revert on every failure.
+- **Ordering note that looks wrong and is not:** the engine consults the session validator **after** the policies. The wallet has already checked the caller, but every policy, forever, must still be safe against arbitrary calldata the engine has not yet authenticated. URP is safe by construction: it calls nothing an attacker can choose (its one callee is its own linked rulebook library, fixed at deploy), effects last, revert on every failure.
 
 ### 💰 FUND MOVEMENT #3 — 100 pUSDC burns on Push Chain
 

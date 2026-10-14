@@ -75,17 +75,22 @@ contract PushAgentWalletAgentDoorTest is BaseTest {
 
     /**
      * @dev Steady-state gas of one universal `executeAsAgent` — warm wallet, warm engine and URP rows,
-     *      the gateway a call recorder — measured at 41,016 on forge 1.5.1-stable with the pinned
+     *      the gateway a call recorder — measured at 69,547 on forge 1.5.1-stable with the pinned
      *      toolchain, plus 10%. It measures the door, the engine and URP, not a real gateway's work.
+     *      RE-MEASURED 2026-10-13 for the gateway auto-approve (§6.1, AGW_GATEWAY_AUTO_APPROVE_PRD): was
+     *      41,016. The +28.5k is the feature: the wallet now approves the exact amount (a cold 0->1e18
+     *      allowance write) and, because a call recorder pulls nothing, also reads the allowance and
+     *      clears it back to 0. Against a real, pulling gateway the clear is skipped.
      */
-    uint256 internal constant AGENT_DOOR_GAS_BUDGET = 45_118;
+    uint256 internal constant AGENT_DOOR_GAS_BUDGET = 76_502;
 
     /**
      * @dev The same call under `--isolate`, which `--gas-report` switches on: every top-level call is
      *      then its own transaction, paying the 21,000 intrinsic cost, its calldata and cold access
-     *      again. Measured at 134,316, plus 10%.
+     *      again. Measured at 149,547, plus 10% (re-measured 2026-10-13 for §6.1 auto-approve; was 134,316 —
+     *      the isolated delta is smaller because the 1e18 -> 0 clear earns a refund within the transaction).
      */
-    uint256 internal constant AGENT_DOOR_GAS_BUDGET_ISOLATED = 147_748;
+    uint256 internal constant AGENT_DOOR_GAS_BUDGET_ISOLATED = 164_502;
 
     bytes32 internal permissionId;
 
@@ -117,7 +122,8 @@ contract PushAgentWalletAgentDoorTest is BaseTest {
             selector: SWAP_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 1 ether
+            maxValue: 1 ether,
+            pins: noPins()
         });
         return universalInitData(
             Config({

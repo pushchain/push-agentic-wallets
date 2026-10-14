@@ -71,6 +71,23 @@ function deployWalletWithSig(OwnerIntent calldata intent, bytes calldata sig, st
   emitted in `WalletDeployed`. Over 64 bytes, the deploy reverts `LabelTooLong(length)`.
 - Deploys revert while the factory is paused (`EnforcedPause`).
 
+### Deploy with rules, in one call
+
+```solidity
+function createWallet(string calldata label, Session[] calldata rules)
+    external returns (address wallet, bytes32[] memory rulesIds);                  // caller = owner
+function createWalletWithSig(OwnerIntent calldata intent, bytes calldata sig, string calldata label,
+    Session[] calldata rules) external returns (address wallet, bytes32[] memory rulesIds);  // relayed, see §7
+```
+
+- Deploys the owner's next wallet at `predictWallet(owner, walletCount(owner))` and grants every rule in order,
+  **atomically**: if any rule is refused (shape, agent config, URP terms), nothing is deployed and the error bubbles.
+- `rules` holds 0 to `MAX_INITIAL_RULES` (8, file-level in `Types.sol`); more reverts `TooManyInitialRules(count)`
+  before anything is deployed. Empty `rules` is exactly `deployWallet`. More rules can be added later with `grantRules`.
+- `rulesIds[i]` is the id `grantRules(rules[i])` would have returned at grant nonce `i` (§4.6); the wallet's
+  `grantNonce()` is `rules.length` afterwards. Each rule emits the usual `Checkpointed` and `RulesGranted`.
+- Both revert while paused (`EnforcedPause`).
+
 ### Look up
 
 ```solidity
@@ -178,10 +195,36 @@ struct AllowedCall {
     uint16  beneficiaryOffset; // byte offset of the beneficiary argument: 4 + 32 * argIndex
     bool    hasBeneficiary;    // if true, that argument must equal expectedCEA
     uint256 maxValue;          // native value per call, in DESTINATION-chain units; 0 = non-payable
+    ArgPin[] pins;             // 0..8 argument words this call must satisfy; 32 across the whole rule
 }
+struct ArgPin { uint16 offset; PinOp op; bytes32 value; }  // offset from byte 0, selector included: 4 = first argument
+enum PinOp { EQ, MAX }   // EQ: the word equals `value`. MAX: the word, as uint256, is <= uint256(value)
 ```
 
-ABI tuple: `(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])`
+ABI tuple: `(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256,(uint16,uint8,bytes32)[])[])`
+
+**Pins are how you bound an argument the beneficiary field cannot describe.** `approve(address,uint256)` has no
+beneficiary — demanding "spender == expectedCEA" would make it useless — so without a pin an allow-listed `approve`
+permits `approve(anyone, type(uint256).max)`, after which that party drains the destination account directly, where
+no gate can reach it. Pin the spender and cap the amount:
+
+```ts
+// USDC.approve(spender, amount) — spender fixed to Aave, allowance capped at 1000 USDC
+pins: [
+  { offset: 4,  op: 0 /* EQ  */, value: pad(AAVE_POOL) },      // argument 1
+  { offset: 36, op: 1 /* MAX */, value: toHex(1_000_000000n) } // argument 2, inclusive ceiling
+]
+```
+
+- **Only static arguments are pinnable.** `bytes`, `string` and arrays hold an offset at their head position, so a pin
+  there pins a pointer. Derive offsets from the ABI; never hand-type them.
+- **`EQ` is full-word.** An address must be left-padded clean, as the ABI encodes it. (The beneficiary check compares
+  only the low 160 bits, so an `EQ` pin is strictly stricter.)
+- **`MAX` bounds one call, not a lifetime.** Ten calls at the ceiling are ten times the ceiling.
+- **Several entries may share one `(target, selector)`** and the call passes if **any** entry passes in full — that is
+  how one token is approved to Aave *or* to Uniswap. An entry with **no** pins beside a pinned one makes the pinned one
+  pointless; **the SDK must refuse that shape**, because URP does not. When no entry passes, the **first** matching
+  entry's error is what reverts.
 
 Rules the contracts enforce at grant (each with a named error, §10):
 
@@ -190,6 +233,8 @@ Rules the contracts enforce at grant (each with a named error, §10):
 - **Every token's chain must equal the rule's chain**: URP calls `token.SOURCE_CHAIN_NAMESPACE()` and compares
   (`ChainMismatch`, `InvalidAsset`). It checks the chain, **not which token**, so picking the right PRC20 is the SDK's job.
 - `expectedCEA` non-zero; `allowedCalls` 1..32; `validUntil` non-zero and in the future.
+- **Pins: at most 8 per allowed call (`TooManyPins`), and at most 32 across the whole rule
+  (`TooManyAllowedCallPins`).** An `op` ordinal other than 0 or 1 is refused by the ABI decoder, with no named error.
 
 What the SDK has to resolve:
 
@@ -221,7 +266,8 @@ struct SvmTerms {
     SvmAccountPin[]  pins;            // max 16 account pins
     SvmDataPin[]     dataPins;        // max 8 instruction-data pins
 }
-struct AllowedProgram { bytes32 program; bytes8 discriminator; uint8 discriminatorLen; bool dataless; uint8 maxAccounts; }
+struct AllowedProgram { bytes32 program; bytes8 discriminator; uint8 discriminatorLen; bool dataless;
+                        uint8 maxAccounts; /* 255 (ANY_ACCOUNT_COUNT) = any count; 1..64 = exact count; 0 refused */ }
 struct SvmAccountPin  { uint8 ruleIndex; uint8 accountIndex; bytes32 expected; }
 struct SvmDataPin     { uint8 ruleIndex; bool fromEnd; uint16 offset; uint16 offsetB; uint8 len;
                         uint8 mode /* 0 EQ, 1 GTE_LE, 2 LTE_LE, 3 RATIO_GTE_LE */; bytes32 expected; uint64 num; uint64 den; }
@@ -234,6 +280,8 @@ What the SDK must get right (all checked at grant, named errors):
 - **One rule per (program, instruction).** Each position takes one pinned key, so if a swap rule pins its input to the
   USDC account, USDT cannot be that instruction's input. Plan Solana rules so different tokens use different instructions.
 - Every program rule needs at least one account pin; `discriminatorLen` is 1..8, or 0 exactly when `dataless`.
+- `maxAccounts` is `ANY_ACCOUNT_COUNT` (255) for any account count, or 1..64 for the exact count the instruction must
+  carry (use the IDL count for fixed-layout instructions). 0 and 65..254 are refused (`SvmMaxAccountsOutOfRange`).
 - System, SPL Token, Token-2022, Stake, the upgradeable loader, the lookup-table program, the gateway program and the
   CEA itself can never be allowed programs.
 
@@ -249,14 +297,18 @@ struct NativeTerms {
     uint256    maxValuePerCall;  // PC (wei) per call
     uint256    maxValueTotal;    // lifetime PC; type(uint256).max = unlimited
     AmountRule amount;           // optional metering of one uint256 argument
-    uint32     maxCalls;         // 0 = unlimited
-    ArgPin[]   pins;             // 0..8 arguments that must equal a fixed word
+    uint32     maxCalls;         // lifetime calls; type(uint32).max (UNLIMITED_CALLS) = unlimited; 0 refused
+    ArgPin[]   pins;             // 0..8 argument words: EQ (equals) or MAX (ceiling)
 }
 struct AmountRule { bool enabled; uint16 offset; uint256 maxPerCall; uint256 maxTotal; }
-struct ArgPin     { uint16 offset; bytes32 expected; }   // offset counts from byte 0, selector included: 4 = first argument
+struct ArgPin     { uint16 offset; PinOp op; bytes32 value; }  // offset from byte 0, selector included: 4 = first argument
+enum   PinOp      { EQ, MAX }                                  // same meaning as on the EVM side (§4.3)
 ```
 
-ABI tuple: `(uint48,address,bytes4,uint256,uint256,(bool,uint16,uint256,uint256),uint32,(uint16,bytes32)[])`
+ABI tuple: `(uint48,address,bytes4,uint256,uint256,(bool,uint16,uint256,uint256),uint32,(uint16,uint8,bytes32)[])`
+
+`ArgPin` is the SAME type the EVM allow-list uses, with the same two operations — one encoder serves both. The field
+was named `expected` before `MAX` existed; it is now `value`, because under `MAX` it is a ceiling.
 
 - `target`/`selector` must match the action they sit in. The contracts do not cross-check at grant, and a mismatch
   makes the rule unusable.
@@ -282,11 +334,21 @@ for byte-identical rules granted twice.
 import { encodeAbiParameters, parseAbiParameters, parseEther, maxUint256, zeroHash } from 'viem';
 
 const terms = encodeAbiParameters(
-  parseAbiParameters('(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256)[])'),
+  parseAbiParameters(
+    '(uint48,address,(address,uint256,uint256)[],uint256,(address,bytes4,uint16,bool,uint256,(uint16,uint8,bytes32)[])[])',
+  ),
   [[validUntil, expectedCEA,
     [[USDC_ETH, 100_000000n, 1000_000000n], [USDT_ETH, 50_000000n, maxUint256]],
     parseEther('1'),
-    [[aavePool, '0x617ba037', 68, true, 0n], [usdcSepolia, '0x095ea7b3', 0, false, 0n]]]],
+    [
+      // Aave supply(): beneficiary pinned by the beneficiary field, asset pinned by an EQ pin
+      [aavePool, '0x617ba037', 68, true, 0n, [[4, 0, pad(usdcSepolia)]]],
+      // USDC approve(): no beneficiary argument exists, so BOTH bounds are pins
+      [usdcSepolia, '0x095ea7b3', 0, false, 0n, [
+        [4,  0, pad(aavePool)],              // EQ  — the spender
+        [36, 1, toHex(1_000_000000n, { size: 32 })], // MAX — the allowance ceiling
+      ]],
+    ]]],
 );
 const initData = encodeAbiParameters(parseAbiParameters('uint16, string, bytes'), [1, 'eip155:11155111', terms]);
 
@@ -350,7 +412,9 @@ The owner acts as the wallet with **no rule checked**: withdraw, approve, call a
 | Batch | `0x01` followed by 31 zero bytes | `abi.encode(Execution[])`, `Execution = (address target, uint256 value, bytes callData)` |
 
 Other modes (delegatecall, try) revert `UnsupportedExecutionMode`. Every call in an owner action records one
-checkpoint. Withdraw PC: single call to the destination address with `value = amount, callData = 0x`. Withdraw a
+checkpoint. **A token outbound through `execute` needs no separate approve:** for any call to the gateway's
+`sendUniversalTxOutbound` the wallet approves the request's token for exactly the request's amount just before the
+call and leaves the allowance at 0 just after (both doors, `executeWithSig` too). Withdraw PC: single call to the destination address with `value = amount, callData = 0x`. Withdraw a
 token: single call to the token with `transfer(to, amount)`.
 
 ---
@@ -390,6 +454,7 @@ Domain: `name "AGWFactory"`, `version "1"`, `chainId = signerChainId`, `verifyin
 | Door | Contract | Fields it checks |
 |---|---|---|
 | `deployWalletWithSig(intent, sig, label)` | factory | `owner`, `index`, `wallet` (= predicted), `executor`, `deadline` |
+| `createWalletWithSig(intent, sig, label, rules)` | factory | `owner`, `index`, `wallet` (= predicted), `executor`, `deadline`, `sessionHash` **= `keccak256(abi.encode(rules))`** (the whole `Session[]`), `grantNonce` **= 0** |
 | `grantRulesWithSig(session, intent, sig)` | wallet | `wallet`, `owner`, `executor`, `deadline`, `sessionHash`, `grantNonce` |
 | `executeWithSig(mode, executionCalldata, intent, sig)` | wallet | `wallet`, `owner`, `executor`, `deadline`, `mode`, `execCalldataHash`, `nonceKey`, `nonceSeq` |
 
@@ -401,20 +466,33 @@ Domain: `name "AGWFactory"`, `version "1"`, `chainId = signerChainId`, `verifyin
 - Signature check: an owner with no code is verified by ECDSA; a contract owner by its UEA method
   (`verifyUniversalPayloadSignature`), then ERC-1271. A **Solana-key owner's UEA must already exist on Push** before
   its first signed intent.
-- If the owner calls `deployWalletWithSig` directly, no signature is needed.
+- If the owner calls `deployWalletWithSig` or `createWalletWithSig` directly, no signature is needed.
+- At `createWalletWithSig`, `sessionHash` commits to the **whole rules array**, so every byte, the order and the count
+  are signed. That value never matches a single-session hash, so the same intent cannot be replayed at the wallet's
+  `grantRulesWithSig`. Presenting it at `deployWalletWithSig` deploys the wallet **without** rules (that door ignores
+  `sessionHash`); the create then fails `IndexMismatch`. Only an executor the owner chose can do that.
 
 ---
 
 ## 8. "Create a wallet with rules" in practice
 
+**One call for every owner kind**, up to 8 rules:
+
 | Owner | How |
 |---|---|
-| **UEA** (external key) | One UEA multicall, one signature: `factory.deployWallet(label)` then `predictedWallet.grantRules(session)` per rule. |
-| **Push EOA**, sends its own txs | Two transactions: `factory.deployWallet(label)`, then `wallet.execute(batch of wallet.grantRules(...))`. |
-| **Push EOA via a relayer** | One signature: an `OwnerIntent` with the deploy fields plus an execute batch of self-grants. The relayer sends `deployWalletWithSig`, then `executeWithSig`. |
+| **UEA** (external key) | One transaction: `factory.createWallet(label, rules)`. |
+| **Push EOA**, sends its own txs | One transaction: `factory.createWallet(label, rules)`. |
+| **Via a relayer or the marketplace** | One signature: an `OwnerIntent` with the deploy fields, `sessionHash = keccak256(abi.encode(rules))` and `grantNonce = 0`. The relayer sends `createWalletWithSig(intent, sig, label, rules)`. |
+
+Either the wallet exists with every rule, or nothing happened.
 
 Fund the wallet with PC (for the agent's per-call fees) and the tokens the rules allow, at its address, before or after
 deployment.
+
+**No gateway approval is ever needed, and the SDK must not set one.** Every outbound, on the agent door and the owner
+doors alike, approves exactly its own amount and leaves the wallet's allowance to the gateway at 0. A standing approval
+would be cleared by the next outbound in that token anyway, so setting one only costs the owner a transaction and an
+owner-side checkpoint.
 
 ---
 
@@ -482,12 +560,13 @@ in full (they come through the wallet).
 | When | Errors |
 |---|---|
 | **Deploy** | `IndexMismatch(expected, provided)`, `IntentWalletMismatch`, `ExecutorMismatch`, `SignatureExpired`, `InvalidOwnerSignature`, `EnforcedPause`, `LabelTooLong(length)` |
+| **Create with rules** | the deploy errors, `TooManyInitialRules(count)`, `IntentRulesMismatch(actual)` (`sessionHash` is not the hash of the rules presented, carried as `actual`), `IntentGrantNonceNotZero(provided)`, and any grant error below for the refused rule |
 | **Label** | `LabelTooLong(length)`, `CallerIsNotOwner` |
 | **Grant: session shape** (wallet) | `MalformedSessionShape`, `TooManyActions(n)`, `DuplicateAction(target, selector)`, `ForbiddenActionTarget(target)`, `ForbiddenActionSelector(selector)`, `RulesTypeMismatch(mode, actionIndex, target)`, `EmptyChain`, `InconsistentChain(actionIndex)`, `CallerIsNotOwner` |
 | **Grant: envelope** (URP) | `UnsupportedEnvelopeVersion(firstWord)`, `EmptyChain`, `UnsupportedNamespace(chainHash)` (chain is neither `eip155:` nor `solana:`; declared in `PushChainLib`) |
-| **Grant: cross-chain terms** (URP) | `AssetListOutOfRange(length)`, `DuplicateAsset(token)`, `InvalidAsset(token)`, `ChainMismatch(declared, assetChain)`, `InvalidConfigField`, `AllowListOutOfRange(length)`, `InvalidExpiry(validUntil)` |
+| **Grant: cross-chain terms** (URP) | `AssetListOutOfRange(length)`, `DuplicateAsset(token)`, `InvalidAsset(token)`, `ChainMismatch(declared, assetChain)`, `InvalidConfigField`, `AllowListOutOfRange(length)`, `InvalidExpiry(validUntil)`, `TooManyPins(count)` (one allowed call over 8), `TooManyAllowedCallPins(total)` (over 32 across the rule) |
 | **Grant: Solana terms** (URP) | `InvalidSvmConfigField`, `ProgramListOutOfRange`, `TooManySvmPins`, `TooManySvmDataPins`, `TooManyCeaAccounts`, `DiscriminatorLenOutOfRange`, `AmbiguousRule`, `ForbiddenProgramInAllowList`, `SvmPinRuleOutOfRange`, `SvmPinIndexOutOfRange`, `SvmMaxAccountsOutOfRange`, `DuplicateSvmPin`, `InvalidCeaAccount`, `CeaAccountsMissExpectedCEA`, `SvmDataPinInvalid`, `RuleWithoutPin` |
-| **Grant: native terms** (URP) | `NativeTargetZero`, `NativeTargetIsGateway`, `TooManyPins`, `ValueOnlyWithPins`, `ValueOnlyWithAmountRule`, `InvalidExpiry` |
+| **Grant: native terms** (URP) | `NativeTargetZero`, `NativeTargetIsGateway`, `ZeroMaxCalls`, `TooManyPins`, `ValueOnlyWithPins`, `ValueOnlyWithAmountRule`, `InvalidExpiry` |
 | **Revoke** | `UnknownPermission(rulesId)`, `CallerIsNotOwner` |
 | **Update batch** | `AssetSpentMismatch(token, expected, actual)`, `SpentLengthMismatch(expected, actual)`, `SpentMismatch(expected, actual)` (native), `NotInitialized`, `WrongModeForCall` |
 | **Owner door / signed doors** | `CallerIsNotOwner`, `UnsupportedExecutionMode`, `MalformedBatchCalldata`, `OwnerSigExpired`, `IntentWalletMismatch`, `ExecutorMismatch`, `InvalidOwnerSignature`, `IntentSessionMismatch`, `IntentGrantNonceMismatch`, `IntentExecMismatch`, `OwnerLaneRequired`, `InvalidNonce` |
@@ -508,8 +587,10 @@ A call made inside an owner action that reverts bubbles its own revert data up u
 | Solana: programs / account pins / data pins / value-holding accounts | 1–32 / ≤16 / ≤8 / ≤16 |
 | `validUntil` | non-zero, in the future; `type(uint48).max` = never |
 | Unlimited total | `type(uint256).max` (0 means nothing) |
+| Unlimited calls / any account count | Unlimited calls: `type(uint32).max`; any account count: 255; 0 is refused for both |
 | Envelope version | 1 |
 | Wallet label | 0 to 64 bytes (`""` = the default `AGW <index + 1>`) |
+| Rules per `createWallet*` | 0 to 8 (`MAX_INITIAL_RULES`) |
 
 ## 13. Checklist before sending a grant
 

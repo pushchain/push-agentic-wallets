@@ -37,6 +37,17 @@ Check the wiring yourself: `cast call <factoryProxy> 'walletImplementation()(add
 `walletImplementation` above, and that implementation's `SESSION_ENGINE()`, `RULES_POLICY()` and `SESSION_VALIDATOR()`
 return the engine, URP and validator in this table.
 
+> **The next URP deployment will add a ninth row, `svmRulebook`.** The Solana rulebook has moved out of
+> `UniversalRulesPolicy` into `SvmRulebook`, an external library linked into URP's bytecode at deploy — which is
+> what brought the implementation from 24,326 B to 17,465 B. The addresses above are the **v5 deployment and are
+> still current**; nothing here has been redeployed yet. When it is:
+>
+> - record the library address from the deploy script's `svmRulebook` key — it cannot be recovered from the chain
+>   afterwards without disassembling URP;
+> - verify the library: `forge verify-contract <lib> src/policies/SvmRulebook.sol:SvmRulebook`;
+> - verify the URP implementation **with** `--libraries src/policies/SvmRulebook.sol:SvmRulebook:<lib>`. Without
+>   that flag the bytecode will not match and verification fails.
+
 ### Push core contracts this deployment points at (not deployed by this repo)
 
 |                             | Address                                                                                                                      |

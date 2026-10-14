@@ -44,7 +44,12 @@ contract ExternalAgentViaUEATest is BaseTest {
     function _urpInitData() internal view returns (bytes memory) {
         AllowedCall[] memory rules = new AllowedCall[](1);
         rules[0] = AllowedCall({
-            target: protocol, selector: SWAP_SELECTOR, beneficiaryOffset: 36, hasBeneficiary: true, maxValue: 0
+            target: protocol,
+            selector: SWAP_SELECTOR,
+            beneficiaryOffset: 36,
+            hasBeneficiary: true,
+            maxValue: 0,
+            pins: noPins()
         });
         return universalInitData(
             Config({

@@ -62,7 +62,8 @@ contract MultiAssetTest is BaseTest {
             selector: SWAP_SELECTOR,
             beneficiaryOffset: BENEFICIARY_OFFSET,
             hasBeneficiary: true,
-            maxValue: 0
+            maxValue: 0,
+            pins: noPins()
         });
     }
 

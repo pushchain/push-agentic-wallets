@@ -7,7 +7,7 @@ import { BaseTest } from "../Base.t.sol";
 
 import { ConfigId } from "smartsessions/DataTypes.sol";
 
-import { AllowedCall, Config, ModeSlot, NativeConfig, RulesType } from "../../src/libraries/Types.sol";
+import { AllowedCall, Config, ModeSlot, NativeConfig, RulesType, UNLIMITED_CALLS } from "../../src/libraries/Types.sol";
 
 import { MockPRC20Source } from "../mocks/MockPRC20Source.sol";
 import { AGW } from "../../src/AGW.sol";
@@ -54,8 +54,9 @@ contract URPEnvelopeTest is BaseTest {
 
     function _universalCfg() internal view returns (Config memory cfg) {
         AllowedCall[] memory calls = new AllowedCall[](1);
-        calls[0] =
-            AllowedCall({ target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0 });
+        calls[0] = AllowedCall({
+            target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0, pins: noPins()
+        });
         cfg.validUntil = VALID_UNTIL;
         cfg.expectedCEA = CEA;
         cfg.assets = oneAsset(ASSET, 100e6, 1000e6);
@@ -69,6 +70,7 @@ contract URPEnvelopeTest is BaseTest {
         cfg.selector = STAKE;
         cfg.maxValuePerCall = 1 ether;
         cfg.maxValueTotal = 10 ether;
+        cfg.maxCalls = UNLIMITED_CALLS;
     }
 
     function _init(bytes memory initData) internal {

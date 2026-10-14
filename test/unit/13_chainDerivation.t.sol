@@ -87,8 +87,9 @@ contract PushAgentWalletChainDerivationTest is BaseTest {
 
     function _universalCfg() internal view returns (Config memory cfg) {
         AllowedCall[] memory calls = new AllowedCall[](1);
-        calls[0] =
-            AllowedCall({ target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0 });
+        calls[0] = AllowedCall({
+            target: PROTOCOL, selector: SWAP, beneficiaryOffset: 4, hasBeneficiary: true, maxValue: 0, pins: noPins()
+        });
         cfg.validUntil = uint48(block.timestamp + 30 days);
         cfg.expectedCEA = CEA;
         cfg.assets = oneAsset(PRC20, 100e6, 1000e6);

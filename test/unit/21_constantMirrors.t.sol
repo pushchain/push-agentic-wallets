@@ -215,7 +215,8 @@ contract ConstantMirrorsTest is BaseTest {
             selector: bytes4(0x11223344),
             beneficiaryOffset: 0,
             hasBeneficiary: false,
-            maxValue: 0
+            maxValue: 0,
+            pins: noPins()
         });
         bytes memory urpInitData = universalInitData(
             Config({

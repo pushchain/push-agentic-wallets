@@ -9,7 +9,7 @@ import { AGW } from "../../src/AGW.sol";
 
 import { AGWErrors } from "../../src/libraries/Errors.sol";
 
-import { AmountRule, ArgPin, MAX_PINS, NativeConfig, RulesType } from "../../src/libraries/Types.sol";
+import { AmountRule, ArgPin, MAX_PINS, NativeConfig, PinOp, RulesType } from "../../src/libraries/Types.sol";
 
 import { StakeDummy } from "../mocks/StakeDummy.sol";
 
@@ -64,7 +64,7 @@ contract PushAgentWalletNativeGrantTest is BaseTest {
     function _cfg(address target, bytes4 selector, uint256 pinCount) internal view returns (NativeConfig memory c) {
         ArgPin[] memory pins = new ArgPin[](pinCount);
         for (uint256 i; i < pinCount; ++i) {
-            pins[i] = ArgPin({ offset: uint16(4 + i * 32), expected: bytes32(uint256(i + 1)) });
+            pins[i] = ArgPin({ offset: uint16(4 + i * 32), op: PinOp.EQ, value: bytes32(uint256(i + 1)) });
         }
         c = NativeConfig({
             initialized: false,
