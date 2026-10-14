@@ -18,6 +18,7 @@ import {
     NativeConfig,
     PinOp,
     RulesType,
+    UNLIMITED_CALLS,
     VALUE_SELECTOR
 } from "../../src/libraries/Types.sol";
 import { VALIDATION_SUCCESS } from "erc7579/interfaces/IERC7579Module.sol";
@@ -77,7 +78,7 @@ contract URPNativeTest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: true, offset: AMOUNT_OFFSET, maxPerCall: 50e6, maxTotal: 60e6 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: pins
         });
@@ -473,14 +474,6 @@ contract URPNativeTest is BaseTest {
             abi.encodeWithSelector(UniversalRulesPolicyErrors.CallLimitReached.selector, uint32(2), uint32(2))
         );
         urp.checkAction(CID, ACCOUNT, STAKE, 0, _stakeCalldata(ACCOUNT, 1e6));
-    }
-
-    function test_native_N9_zeroMaxCallsIsUnlimited() public {
-        _initDefaultNative();
-        for (uint256 i; i < 5; ++i) {
-            _check(CID, STAKE, 0, _stakeCalldata(ACCOUNT, 1e6));
-        }
-        assertEq(_cfg(CID).callsUsed, 5, "maxCalls == 0 means unlimited");
     }
 
     // ═══════════════════════ decision 22 — the divergence ═══════════════════════

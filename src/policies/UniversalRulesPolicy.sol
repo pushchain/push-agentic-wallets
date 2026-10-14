@@ -33,6 +33,7 @@ import {
     SvmConfig,
     UniversalOutboundTxRequest,
     UniversalTerms,
+    UNLIMITED_CALLS,
     VALUE_SELECTOR,
     VmFamily
 } from "../libraries/Types.sol";
@@ -421,7 +422,9 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
      *        authorise anything — every request under it would die at N7/N8 — so it is a
      *        misconfiguration the owner believes they granted, not a valid ascetic config. Same
      *        reasoning as the empty-allow-list refusal in universal mode.
-     *      - Deliberately does NOT validate cap values (zero and max are both legal), pin offsets or
+     *      - Refuses `maxCalls == 0`. A rule that can make no call authorises nothing; no limit is
+     *        written `UNLIMITED_CALLS`. This is the ONE count the guards judge.
+     *      - Deliberately does NOT validate the other cap values (zero and max are both legal), pin offsets or
      *        `amount.offset` — they cannot be checked against calldata that does not exist yet, and a
      *        wrong offset fails closed at N7/N8 rather than widening anything. Nor the selector
      *        against the engine's fallback flags: the wallet refuses those at grant, and a
@@ -445,6 +448,7 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         if (incoming.target == UNIVERSAL_GATEWAY_PC) {
             revert UniversalRulesPolicyErrors.NativeTargetIsGateway(incoming.target);
         }
+        if (incoming.maxCalls == 0) revert UniversalRulesPolicyErrors.ZeroMaxCalls();
         if (incoming.pins.length > MAX_PINS) revert UniversalRulesPolicyErrors.TooManyPins(incoming.pins.length);
 
         if (incoming.selector == VALUE_SELECTOR) {
@@ -623,6 +627,8 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
      *        A call is a use; mirroring universal's zero-amount rule (which writes nothing) would
      *        make `maxCalls` bypassable by zero-value calls, i.e. advisory. This is the one
      *        deliberate divergence between the two rulebooks.
+     *      - N9 treats `maxCalls == UNLIMITED_CALLS` as "no limit" — exactly that value, not a range;
+     *        every other value is the lifetime ceiling. Init refused 0, so 0 never reaches here.
      *      - Value-only configs carry no pins and no amount rule — init refuses that combination —
      *        so with `data.length == 0` the N7 loop does not execute and N8 is skipped.
      *
@@ -713,8 +719,8 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
             }
         }
 
-        // N9
-        if (cfg.maxCalls != 0 && cfg.callsUsed >= cfg.maxCalls) {
+        // N9 — UNLIMITED_CALLS is the only "no limit" value; init refused 0.
+        if (cfg.maxCalls != UNLIMITED_CALLS && cfg.callsUsed >= cfg.maxCalls) {
             revert UniversalRulesPolicyErrors.CallLimitReached(cfg.callsUsed, cfg.maxCalls);
         }
 
@@ -722,8 +728,9 @@ contract UniversalRulesPolicy is IUniversalRulesPolicy, Initializable {
         cfg.valueSpent = newValueSpent;
         cfg.amountSpent = newAmountSpent;
         unchecked {
-            // Bounded by N9 when maxCalls != 0; when it is 0 the counter is informational and a
-            // uint32 overflow is unreachable at any realistic call volume.
+            // Bounded by N9 unless `maxCalls == UNLIMITED_CALLS`. Then the counter is informational,
+            // and a uint32 wrap is unreachable at any realistic call volume and, being unchecked,
+            // harmless.
             cfg.callsUsed = cfg.callsUsed + 1;
         }
         emit NativeCallMetered(id, msg.sender, account, value, amt);

@@ -9,7 +9,7 @@ import { BaseTest } from "../Base.t.sol";
 
 import { MockPRC20 } from "../mocks/MockUniversalGateway.sol";
 
-import { AllowedCall, Config, NativeConfig, RulesType } from "../../src/libraries/Types.sol";
+import { AllowedCall, Config, NativeConfig, RulesType, UNLIMITED_CALLS } from "../../src/libraries/Types.sol";
 
 import { AGW } from "../../src/AGW.sol";
 
@@ -187,6 +187,7 @@ contract PushAgentWalletLifecycleTest is BaseTest {
         cfg.validUntil = uint48(block.timestamp + 365 days);
         cfg.target = target;
         cfg.selector = selector;
+        cfg.maxCalls = UNLIMITED_CALLS;
         return nativeInitData(cfg);
     }
 

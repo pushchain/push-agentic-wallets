@@ -106,7 +106,7 @@ about lives inside the payload, two decode levels down. **URP is the contract th
 
 | Contract | Role |
 |---|---|
-| `AGWFactory` (`src/`) | UUPS proxy. Deploys wallet clones at pre-computable addresses; the registry of record for "is this a real wallet, and who owns it?" There is no owner parameter: the owner is the caller, or the signer of an `OwnerIntent` (the `deployWalletWithSig(intent, sig, label)` form). |
+| `AGWFactory` (`src/`) | UUPS proxy. Deploys wallet clones at pre-computable addresses; the registry of record for "is this a real wallet, and who owns it?" There is no owner parameter: the owner is the caller, or the signer of an `OwnerIntent` (the `deployWalletWithSig(intent, sig, label)` form). `createWallet(label, rules)` / `createWalletWithSig(intent, sig, label, rules)` deploy and grant atomically. |
 | `AGW` (`src/`) | Holds funds. Minimal clone with 40 bytes of immutable args (owner 0–19, factory 20–39). Push Chain has no ERC-4337 EntryPoint, so the wallet does the EntryPoint's jobs itself. |
 | `UniversalRulesPolicy` — URP (`src/policies/`) | The only novel contract and the security boundary. **Three rulebooks**, in normative order, fail closed: universal-EVM (gates 1–16), universal-SVM (S1–S18; S1–S10 restate gates 1–10, S11+ parse the Solana execute payload), and native/Push-side (nine gates). Which one runs is derived from the rules set's chain string, never from a flag anyone sets. Upgradeable behind a transparent proxy. **The universal-SVM rulebook lives in `SvmRulebook`, a linked external library** reached by `DELEGATECALL` — extracted to free EIP-170 headroom, with no behavioural change (see the `checkAction` invariant below). |
 | `AgentValidator` (`src/validators/`) | Stateless sender validator: the rules set's config is the agent's Push address; it confirms the sender the wallet wrote into the engine's signature field. Verifies no signature. |
@@ -134,13 +134,22 @@ AGW follows the core/gateway naming standard (`docs-internal/sdk-first-changes/N
 
 - **The two doors are the whole authority model.** `execute` (owner door) consults *exactly two things* —
   the immutable-args owner and calldata — and its only side effect besides the calls is one checkpoint
-  write per call to the wallet's own slot 0, which cannot revert. No module, policy, engine state or flag
+  write per call to the wallet's own slot 0, which cannot revert, plus, for a call to the gateway's
+  `sendUniversalTxOutbound`, a best-effort approve of exactly `req.amount` before the call and a best-effort
+  clear of the allowance after it, both derived from calldata alone, neither able to revert (`_execute`,
+  §6.1). No module, policy, engine state or flag
   may ever be read there; it must succeed with the engine uninstalled, a hostile validator installed, or
   ghost-rules state. Adding any check is the catastrophic regression. `executeAsAgent` (agent door) is
   callable only by the rules set's agent: the wallet checks `msg.sender == agentOf(rulesId)` and writes the
   sender into the engine's signature field, which the sender validator checks. The agent is a Push
   address — an EOA, or the UEA of an external key; the wallet verifies no signature, and replay is the
   sender's own nonce.
+- **No standing allowance to the gateway:** every wallet outbound approves exactly its amount and leaves the
+  allowance at 0, on every door.
+- **Rules enter a wallet only through `_grantRules`:** from `grantRules` / `grantRulesWithSig`, or, once and only
+  during deployment, from the factory's `createWallet*` via `initializeAccount`. `deployWallet*` always passes no
+  rules. At `createWalletWithSig`, `intent.sessionHash` commits to `keccak256(abi.encode(Session[]))` and
+  `grantNonce` must be 0.
 - **Checkpoints never tick from the agent door.** `_checkpoint` is called only from the two owner doors
   (once per call, before the call), `_grantRules`, `revokeRules` and `revokeAllRules` — never from
   `_execute`, which both doors share. Kinds are a frozen, append-only wire format.
@@ -202,6 +211,8 @@ AGW follows the core/gateway naming standard (`docs-internal/sdk-first-changes/N
   what pins the destination chain: every listed token is chain-checked at grant, an empty list is refused,
   and a zero-amount request naming an unlisted token is refused. Each token has its own caps and its own
   `spent`; "unlimited" is `type(uint256).max`, never 0. See `docs/multi-asset-review.md`.
+- **Every limit reads the same way: 0 means nothing, the type's maximum means unlimited.** The two count fields
+  with no meaningful zero, native `maxCalls` and SVM `maxAccounts`, refuse 0 at grant.
 - **The factory's derivation is frozen forever.** `_walletImplementation` is the append-only storage anchor
   with no setter; the salt formula and the 40-byte immutable-args encoding may never change, because
   counterfactual funding is a supported flow with no recovery path.

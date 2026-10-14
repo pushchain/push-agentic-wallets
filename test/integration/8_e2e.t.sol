@@ -14,9 +14,11 @@ import {
     ModeSlot,
     NativeConfig,
     PinOp,
-    RulesType
+    RulesType,
+    UNLIMITED_CALLS
 } from "../../src/libraries/Types.sol";
 import { MockUniversalGateway, MockPRC20 } from "../mocks/MockUniversalGateway.sol";
+import { PullingGatewayMock } from "../mocks/PullingGatewayMock.sol";
 import { StakeDummy } from "../mocks/StakeDummy.sol";
 import { MockERC20 } from "../mocks/MockERC20.sol";
 import { MockUEA } from "../mocks/MockUEA.sol";
@@ -185,6 +187,72 @@ contract E2ETest is BaseTest {
         vm.prank(originKey);
         vm.expectRevert(abi.encodeWithSelector(AGWErrors.CallerIsNotAgent.selector, livePid, originKey));
         bobAgw.executeAsAgent(livePid, _singleMode(), ecd);
+    }
+
+    /**
+     * The Bob flow with NO owner approve step at all (§6.1): deploy, grant, fund, and the agent's
+     * outbound goes through against a gateway that really pulls, because the wallet approves exactly
+     * the amount itself and leaves nothing behind. The owner side is never touched after the grant.
+     */
+    function test_BobFlow_NoGatewayApprovalStep() public {
+        vm.etch(GATEWAY, type(PullingGatewayMock).runtimeCode);
+        PullingGatewayMock pulling = PullingGatewayMock(payable(GATEWAY));
+
+        vm.prank(BOB_UEA);
+        bobAgw = AGW(payable(factory.deployWallet("lending")));
+        vm.prank(BOB_UEA);
+        permissionId = bobAgw.grantRules(canonicalSession(agentConfig(agentAddr), _urpConfig()));
+        pUSDC.mint(address(bobAgw), HUNDRED_USDC);
+        vm.deal(address(bobAgw), 1 ether);
+
+        assertEq(pUSDC.allowance(address(bobAgw), GATEWAY), 0, "nobody ever approved the gateway");
+        uint64 checkpointsBefore = bobAgw.checkpointCount();
+
+        _submitRequest(_executionCalldata(HUNDRED_USDC, 0.05 ether));
+
+        assertEq(pulling.callCount(), 1, "one outbound");
+        assertEq(pulling.allowanceAtEntry(), HUNDRED_USDC, "the gateway saw exactly the amount");
+        assertEq(pUSDC.balanceOf(GATEWAY), HUNDRED_USDC, "the gateway pulled 100 pUSDC");
+        assertEq(pUSDC.balanceOf(address(bobAgw)), 0, "100 pUSDC left the wallet");
+        assertEq(_spent(permissionId), HUNDRED_USDC, "URP.assets[0].spent == 100e6");
+        assertEq(pUSDC.allowance(address(bobAgw), GATEWAY), 0, "no allowance survives the outbound");
+        assertEq(bobAgw.checkpointCount(), checkpointsBefore, "the owner side was never touched");
+    }
+
+    /**
+     * A Push-EOA Bob — whose multicall core rejects — deploys and grants in ONE call with
+     * `createWallet`, the agent's outbound goes through at once, and Bob's revoke stops the agent.
+     */
+    function test_BobFlow_CreateWalletOneCall() public {
+        address bobEoa = makeAddr("0xbobeoa");
+        (address predicted,) = factory.predictWallet(bobEoa, 0);
+
+        Session[] memory rules = new Session[](1);
+        rules[0] = canonicalSession(agentConfig(agentAddr), _urpConfig());
+
+        vm.prank(bobEoa);
+        (address wallet, bytes32[] memory rulesIds) = factory.createWallet("bob", rules);
+        bobAgw = AGW(payable(wallet));
+
+        assertEq(wallet, predicted, "deployed at the predicted address");
+        assertEq(factory.ownerOf(wallet), bobEoa, "Bob owns it");
+        assertEq(bobAgw.agentOf(rulesIds[0]), agentAddr, "the rules set names the agent");
+
+        pUSDC.mint(wallet, HUNDRED_USDC);
+        vm.deal(wallet, 1 ether);
+
+        _act(agentAddr, agentAddr, rulesIds[0], _executionCalldata(HUNDRED_USDC, 0.05 ether));
+        assertEq(gateway.callCount(), 1, "the agent's outbound dispatched immediately");
+        assertEq(gateway.lastCall().sender, wallet, "from the wallet");
+        assertEq(_spent(rulesIds[0]), HUNDRED_USDC, "URP metered it");
+
+        vm.prank(bobEoa);
+        bobAgw.revokeRules(rulesIds[0]);
+
+        bytes memory ecd = _executionCalldata(0, 0.01 ether);
+        vm.prank(agentAddr);
+        vm.expectRevert(abi.encodeWithSelector(AGWErrors.CallerIsNotAgent.selector, rulesIds[0], agentAddr));
+        bobAgw.executeAsAgent(rulesIds[0], _singleMode(), ecd);
     }
 
     /// @dev Runs stages 3, 5, 7b and 7 with `agent` named in the rules set and `caller` submitting:
@@ -696,7 +764,7 @@ contract E2ETest is BaseTest {
             valueSpent: 0,
             amount: AmountRule({ enabled: true, offset: 36, maxPerCall: 50e6, maxTotal: 60e6 }),
             amountSpent: 0,
-            maxCalls: 0,
+            maxCalls: UNLIMITED_CALLS,
             callsUsed: 0,
             pins: pins
         });
